@@ -208,10 +208,10 @@ class ScreeningAgent(Agent):
                         event.get("explanation")
                         or f"Matched known scam tactic: {top.label}."
                     )
-                # Confirmed scam tactic (semantic + red-flag match): end the call now.
-                await self.maybe_hangup("scam_detected", force=True)
-                return
 
+        # A tactic match is suspicion, not proof — a legit caller can mention the
+        # same topic ("gift card"). Let the grace period + score gating decide,
+        # so a single passive match never forces an immediate teardown.
         await self.maybe_hangup("threshold")
 
     @function_tool

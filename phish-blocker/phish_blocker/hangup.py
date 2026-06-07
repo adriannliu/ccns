@@ -46,10 +46,11 @@ async def maybe_hangup_call(
     if state.hangup_started:
         return
 
-    # Give the caller a few chances to justify themselves before a score-driven
-    # hang-up. A forced trigger (confirmed scam tactic or confident signal) is a
-    # definitive detection and ends the call immediately, bypassing this guard.
-    if not force and getattr(state, "caller_turns", 0) < min_caller_turns():
+    # Hard floor: always give the caller a few chances to justify themselves
+    # before ANY hang-up, even a forced one. A single alarming line ("gift card")
+    # is grounds to interrogate, not to immediately tear down the call. Force only
+    # bypasses the score check below, never this grace window.
+    if getattr(state, "caller_turns", 0) < min_caller_turns():
         logger.info(
             "hang-up deferred (%s): caller_turns=%d < min=%d",
             trigger,
