@@ -21,6 +21,10 @@ def _enabled() -> bool:
     return bool(resident_phone())
 
 
+def transfer_enabled() -> bool:
+    return _enabled()
+
+
 def resident_phone() -> str | None:
     raw = os.getenv("RESIDENT_PHONE", "").strip()
     if not raw:
@@ -106,3 +110,42 @@ async def maybe_transfer_call(
         session.shutdown()
     except Exception as e:
         logger.warning("session shutdown after transfer failed: %s", e)
+
+
+async def transfer_contact_call(
+    *,
+    job_ctx: JobContext,
+    participant: rtc.RemoteParticipant,
+    contact_name: str,
+) -> bool:
+    if not _enabled():
+        return False
+
+    phone = resident_phone()
+    if phone is None:
+        return False
+
+    logger.info("known-contact transfer starting (%s -> %s)", contact_name, phone)
+    await bus.push(
+        {
+            "type": "transfer",
+            "status": "initiated",
+            "to": phone,
+            "reason": f"Known contact: {contact_name}",
+        }
+    )
+
+    try:
+        await job_ctx.transfer_sip_participant(
+            participant,
+            phone,
+            play_dialtone=True,
+        )
+    except Exception as e:
+        logger.warning("contact SIP transfer failed: %s", e)
+        await bus.push({"type": "transfer", "status": "failed", "error": str(e)})
+        return False
+
+    await bus.push({"type": "transfer", "status": "connected", "to": phone})
+    logger.info("contact SIP transfer initiated for %s", participant.identity)
+    return True

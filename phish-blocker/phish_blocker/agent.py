@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
+from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -15,11 +16,15 @@ from livekit.agents import (
 )
 from livekit.plugins import aws, silero
 
-from phish_blocker import bus
+from phish_blocker import bus, contacts
 from phish_blocker.moss_tactics import init_moss, retrieve_tactics
 from phish_blocker.hangup import maybe_hangup_call
 from phish_blocker.notify import hangup_threshold, send_call_summary
-from phish_blocker.transfer import maybe_transfer_call
+from phish_blocker.transfer import (
+    maybe_transfer_call,
+    transfer_contact_call,
+    transfer_enabled,
+)
 
 load_dotenv()
 logger = logging.getLogger("phish-blocker")
@@ -215,11 +220,52 @@ class ScreeningAgent(Agent):
 server = AgentServer()
 
 
+async def _try_contact_fastpath(ctx: JobContext) -> bool:
+    if ctx.is_fake_job():
+        return False
+    if not transfer_enabled():
+        return False
+
+    try:
+        participant = await ctx.wait_for_participant(
+            kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+        )
+    except Exception as e:
+        logger.warning("contact fast-path: no SIP participant: %s", e)
+        return False
+
+    number = participant.attributes.get("sip.phoneNumber")
+    contact = contacts.lookup(number)
+    if contact is None:
+        return False
+
+    logger.info("known contact %s (%s); fast-path PASS + transfer", contact.name, number)
+    await bus.push({"type": "call_start", "caller_id": number, "contact": contact.name})
+    await bus.push(
+        {
+            "type": "verdict",
+            "recommendation": "pass",
+            "reason": f"Known contact: {contact.name}",
+            "scam_score": 0.0,
+        }
+    )
+
+    await transfer_contact_call(
+        job_ctx=ctx,
+        participant=participant,
+        contact_name=contact.name,
+    )
+    return True
+
+
 @server.rtc_session(agent_name="agent-py")
 async def entrypoint(ctx: JobContext):
-    agent = ScreeningAgent(job_ctx=ctx)
-
     await init_moss()
+
+    if await _try_contact_fastpath(ctx):
+        return
+
+    agent = ScreeningAgent(job_ctx=ctx)
 
     region = os.getenv("AWS_DEFAULT_REGION") or os.getenv("AWS_REGION")
     llm_kwargs = {
