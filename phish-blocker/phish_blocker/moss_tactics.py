@@ -54,6 +54,14 @@ SEM_TURN_CAP = _env_float("MOSS_SEM_TURN_CAP", 0.45)
 # of it, or an explicit flag_scam_signal are what escalate past this ceiling.
 PASSIVE_SCORE_CEILING = _env_float("MOSS_PASSIVE_SCORE_CEILING", 0.45)
 
+# Moss returns a nearest neighbour for ANY query, so unrelated chatter (a basketball
+# game) still scores above SEM_THRESHOLD against some tactic and would otherwise show
+# up as a spurious "risk factor". A semantic-only match (the caller used NONE of the
+# tactic's red-flag phrasing) must clear this much-higher relevance bar before it is
+# treated as evidence at all; below it the match is dropped as noise — no signal chip,
+# no score movement. Real red-flag phrasing bypasses this gate entirely.
+SEM_SIGNAL_RELEVANCE = _env_float("MOSS_SEM_SIGNAL_RELEVANCE", 0.6)
+
 _STOPWORDS = {
     "the", "a", "an", "your", "you", "to", "of", "and", "or", "is", "are",
     "in", "on", "for", "me", "my", "i", "it", "they", "them", "this", "that",
@@ -142,6 +150,13 @@ def _build_match(caller_text: str, tactic: Tactic, retrieval_score: float) -> Ta
     # tactic, scaled by its severity. Explicit red-flag phrasing only nudges it upward.
     relevance = _semantic_relevance(retrieval_score)
     keyword_conf = min(1.0, len(hits) / KEYWORD_FULL_CONF_AT)
+
+    # Drop weak topic-overlap with no red-flag phrasing: it is nearest-neighbour noise
+    # (e.g. small talk faintly matching a tech-support tactic), not evidence. Zeroing
+    # relevance here removes it from both the score and the dashboard signal feed.
+    if not hits and relevance < SEM_SIGNAL_RELEVANCE:
+        relevance = 0.0
+
     match_strength = min(1.0, relevance + KEYWORD_BONUS * keyword_conf)
     confidence = tactic.severity * match_strength
 
