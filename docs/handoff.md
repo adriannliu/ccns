@@ -81,7 +81,8 @@ ccns/
     │   ├── corpus.py            # scam_tactics.jsonl loader
     │   ├── notify.py            # console summaries + hangup thresholds
     │   ├── dashboard.py         # aiohttp server + REST + WebSocket
-    │   └── bus.py               # agent → POST /ingest
+    │   ├── bus.py               # agent → POST /ingest
+    │   └── ssl_certs.py         # cert bundle for Moss HTTPS
     ├── static/index.html        # dashboard UI (Live | History tabs)
     ├── data/
     │   ├── contacts.json        # known safe callers
@@ -90,7 +91,9 @@ ccns/
     └── scripts/
         ├── build_moss_index.py
         ├── demo_dashboard.py    # offline UI replay
-        └── demo_scripts.md
+        ├── demo_scripts.md
+        ├── bench_retrieval.py   # Moss latency/accuracy bench
+        └── verify_aws.py        # Bedrock/Nova Sonic cred check
 ```
 
 ---
@@ -114,14 +117,18 @@ ccns/
 
 ### `transfer.py`
 - `maybe_transfer_call()` on PASS — handoff speech then `transfer_sip_participant()`
-- Targets: `+1...`, `tel:+1...`, `sip:+1...@TWILIO_PSTN_DOMAIN`
-- Needs `RESIDENT_PHONE`; `TWILIO_PSTN_DOMAIN` required for most Twilio PSTN transfers
+- `transfer_attempts()` tries `tel:+1...`, E.164, with/without dialtone, then `sip:+1...@TWILIO_PSTN_DOMAIN` variants
+- `_ensure_call_active()` waits for SIP call to be active before REFER
+- `_failure_hint()` surfaces Twilio trunk transfer setup tips on failure
+- Needs `RESIDENT_PHONE`; `TWILIO_PSTN_DOMAIN` required for most Twilio PSTN transfers (enable Call Transfers + PSTN transfers on trunk)
 
 ### `hangup.py`
 - Triggers on explicit `block` OR score ≥ `HANGUP_SCORE_THRESHOLD` (0.66) for `HANGUP_EXCHANGES_REQUIRED` (2) elevated turns
 - Records blocklist, speaks goodbye, shuts down session, `delete_room()`
 
 ### `moss_tactics.py`
+- Semantic relevance ramp: `MOSS_SEM_THRESHOLD` (default 0.45) → `MOSS_SEM_FULL_RELEVANCE` (default 0.75)
+- Red-flag keyword hits add bonus (`MOSS_KEYWORD_BONUS`, default 0.15) but are **not required** for a match
 - Score = `max(prior, best_confidence + corroboration)`; corroboration +0.05/category (cap 0.15)
 - `flag_scam_signal` still uses `max(score, confidence)` — does not accumulate per repeated signal
 
@@ -131,7 +138,10 @@ ccns/
 
 ### Tabs
 - **Live Screening** — transcript, threat gauge, tactic chips, verdict, transfer status
-- **History** — full-page grid of flagged numbers from `blocklist.json`
+- **History** — full-page card grid from `blocklist.json`
+  - **Mark as Safe** — remove from blocklist; optional checkbox to add name to `contacts.json`
+  - **Remove Only** — delete from blocklist without allowlisting
+  - Live sync via `history_entry` / `history_removed` WebSocket events
 
 ### REST API
 | Method | Path | Purpose |
@@ -159,6 +169,9 @@ ccns/
 LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
 AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
 MOSS_PROJECT_ID, MOSS_PROJECT_KEY, MOSS_INDEX_NAME, MOSS_MODEL_ID
+MOSS_SEM_THRESHOLD=0.45
+MOSS_SEM_FULL_RELEVANCE=0.75
+MOSS_KEYWORD_BONUS=0.15
 DASHBOARD_PORT, DASHBOARD_INGEST_URL
 NOTIFY_SCORE_THRESHOLD=0.66
 HANGUP_SCORE_THRESHOLD=0.66

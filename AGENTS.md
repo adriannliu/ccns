@@ -22,9 +22,10 @@ ccns/
 │   │   ├── moss_tactics.py    # Moss retrieval + scam score
 │   │   ├── corpus.py          # Scam tactic corpus loader
 │   │   ├── notify.py          # Console call summaries + hangup thresholds
-│   │   ├── dashboard.py       # aiohttp: /ws, /ingest, /api/history
-│   │   └── bus.py             # agent → dashboard HTTP bridge
-│   ├── static/index.html      # live dashboard UI
+│   │   ├── dashboard.py       # aiohttp: /ws, /ingest, /api/history (GET/DELETE/verify)
+│   │   ├── bus.py             # agent → dashboard HTTP bridge
+│   │   └── ssl_certs.py       # cert bundle for Moss HTTPS
+│   ├── static/index.html      # dashboard UI (Live | History tabs)
 │   ├── data/
 │   │   ├── contacts.json      # known callers (E.164)
 │   │   ├── blocklist.json     # flagged/blocked numbers + reasons
@@ -32,7 +33,9 @@ ccns/
 │   └── scripts/
 │       ├── build_moss_index.py
 │       ├── demo_dashboard.py  # replay scam script to dashboard (no agent)
-│       └── demo_scripts.md
+│       ├── demo_scripts.md
+│       ├── bench_retrieval.py
+│       └── verify_aws.py
 ├── docs/
 │   ├── handoff.md             # deep spec — read before non-trivial changes
 │   └── objection-ai.md        # separate venture notes, not phish-blocker code

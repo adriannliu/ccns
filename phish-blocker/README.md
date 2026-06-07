@@ -14,7 +14,7 @@ and renders a live verdict on a dashboard.
 - **Transfers verified callers** — PASS verdict → SIP REFER cold transfer to `RESIDENT_PHONE`
 - **Known-contact fast-path** — caller ID in `data/contacts.json` → silent PASS + immediate transfer (no agent)
 - **Scam blocklist** — flagged numbers saved to `data/blocklist.json` with reason; repeat callers auto-blocked
-- **History panel** — dashboard shows past blocked/flagged numbers (`GET /api/history`)
+- **History tab** — full-page flagged-number list; Mark as Safe, remove, or add to contacts allowlist
 - **Live dashboard** — transcript, scam score, tactic chips, verdict, transfer status
 
 ## Structure
@@ -30,10 +30,11 @@ phish-blocker/
 │   ├── moss_tactics.py  # Moss retrieval + scam score
 │   ├── corpus.py        # Scam tactic corpus loader
 │   ├── notify.py        # Console call summaries + hangup thresholds
-│   ├── dashboard.py     # aiohttp server + WebSocket broadcast
-│   └── bus.py           # agent → dashboard event bridge
+│   ├── dashboard.py     # aiohttp: /ws, /ingest, /api/history
+│   ├── bus.py           # agent → dashboard event bridge
+│   └── ssl_certs.py     # cert bundle for Moss HTTPS
 ├── static/
-│   └── index.html       # live dashboard UI
+│   └── index.html       # dashboard UI (Live | History tabs)
 ├── data/
 │   ├── contacts.json    # known callers (E.164 phone → name)
 │   ├── blocklist.json   # flagged/blocked numbers + reasons
@@ -41,7 +42,9 @@ phish-blocker/
 ├── scripts/
 │   ├── build_moss_index.py
 │   ├── demo_dashboard.py   # replay scam script to dashboard (no agent)
-│   └── demo_scripts.md
+│   ├── demo_scripts.md
+│   ├── bench_retrieval.py  # Moss latency/accuracy bench
+│   └── verify_aws.py       # Bedrock/Nova Sonic cred check
 ├── pyproject.toml
 └── .env.example
 ```
@@ -77,7 +80,7 @@ Follow LiveKit's "Inbound calls via Twilio" guide:
 - **Trunk credentials must match the TwiML Bin** — #1 failure mode.
 - Set `RESIDENT_PHONE` in `.env` and test cold transfer on a real call.
 
-Optional: set `TWILIO_PSTN_DOMAIN` (Elastic SIP trunk termination domain) if SIP REFER needs a `sip:` URI target.
+Set `TWILIO_PSTN_DOMAIN` (Elastic SIP trunk termination domain, e.g. `mytrunk.pstn.twilio.com`) — required for most Twilio PSTN transfers. Enable **Call Transfers** and **PSTN transfers** on the trunk.
 
 ## Contacts allowlist
 
@@ -93,9 +96,17 @@ Phone numbers are normalized to E.164. Known callers bypass the agent entirely a
 
 ## Scam blocklist
 
-Blocked and challenged calls are saved to `data/blocklist.json` with phone number, reason, scam score, and matched signals. The dashboard **History** panel lists all flagged numbers (`GET /api/history`).
+Blocked and challenged calls are saved to `data/blocklist.json` with phone number, reason, scam score, and matched signals. Open the dashboard **History** tab to review flagged numbers.
 
-If a previously flagged number calls again, the call is **instantly rejected** (no agent) — same fast-path pattern as contacts, but for BLOCK.
+| API | Purpose |
+|---|---|
+| `GET /api/history` | List all entries |
+| `DELETE /api/history` | Remove from blocklist (`{"phone": "+1..."}`) |
+| `POST /api/history/verify` | Mark as safe; optional `add_to_contacts` + `name` |
+
+In the UI: **Mark as Safe** (remove + optional allowlist), **Remove Only**. Repeat callers are **instantly rejected** (no agent).
+
+Requires `sip.phoneNumber` on inbound SIP — if missing, calls block on dashboard but nothing is saved.
 
 Inspect or test lookup:
 
