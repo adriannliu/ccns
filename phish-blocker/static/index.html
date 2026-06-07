@@ -82,6 +82,7 @@
   }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .dot.live { background: var(--green); box-shadow: 0 0 10px var(--green); animation: blink 1.4s ease-in-out infinite; }
+  .dot.ending { background: var(--red); box-shadow: 0 0 10px var(--red); animation: blink 1.4s ease-in-out infinite; }
   .dot.ended { background: var(--muted); }
   @keyframes blink { 50% { opacity: .35; } }
 
@@ -445,6 +446,11 @@
     v.innerHTML = (rec ? rec.toUpperCase() : "SCREENING…") + (reason ? `<div class="reason">${reason}</div>` : "");
   }
 
+  function setScamEndingStatus() {
+    $("dot").className = "dot ending";
+    $("status").textContent = "Scam detected — ending call";
+  }
+
   function formatPhone(phone) {
     if (!phone) return "Unknown";
     const d = phone.replace(/\D/g, "");
@@ -609,9 +615,12 @@
         setVerdict("", "");
         $("verdict").textContent = "SCREENING…";
         if (e.blocklist_hit) {
+          setScamEndingStatus();
           setVerdict("block", "Known scam source — call rejected");
           showAlert("Unwanted activity detected");
         }
+      } else if (e.type === "call_ending") {
+        setScamEndingStatus();
       } else if (e.type === "call_end") {
         $("dot").className = "dot ended";
         $("status").textContent = "Call ended — standby";
@@ -627,7 +636,10 @@
       } else if (e.type === "verdict") {
         if (typeof e.scam_score === "number") setScore(e.scam_score);
         setVerdict(e.recommendation, e.reason);
-        if (e.recommendation === "block") showAlert("Unwanted activity detected");
+        if (e.recommendation === "block") {
+          setScamEndingStatus();
+          showAlert("Unwanted activity detected");
+        }
       } else if (e.type === "transfer") {
         const v = $("verdict");
         if (e.status === "initiated") {

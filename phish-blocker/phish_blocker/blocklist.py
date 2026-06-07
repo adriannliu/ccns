@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from phish_blocker.contacts import normalize
+from phish_blocker.scam_handling import begin as begin_scam_handling
 
 logger = logging.getLogger("phish-blocker.blocklist")
 
@@ -211,6 +212,14 @@ async def reject_repeat_caller(job_ctx, participant, entry: BlockedEntry) -> boo
             "reason": reason,
             "scam_score": entry.scam_score,
         }
+    )
+
+    await begin_scam_handling(
+        trigger="repeat_caller",
+        caller_id=entry.phone,
+        reason=reason,
+        scam_score=entry.scam_score,
+        repeat_caller=True,
     )
 
     updated = record(

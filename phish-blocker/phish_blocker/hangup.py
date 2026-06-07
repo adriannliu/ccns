@@ -4,6 +4,7 @@ from livekit.agents import JobContext
 
 from phish_blocker import blocklist, bus
 from phish_blocker.notify import _default_reason, should_hangup
+from phish_blocker.scam_handling import begin as begin_scam_handling
 
 logger = logging.getLogger("phish-blocker.hangup")
 
@@ -68,6 +69,13 @@ async def maybe_hangup_call(
                 "scam_score": state.scam_score,
             }
         )
+
+    await begin_scam_handling(
+        trigger=trigger,
+        caller_id=getattr(state, "caller_id", None),
+        reason=state.reason,
+        scam_score=state.scam_score,
+    )
 
     await _record_blocklist(state)
     await send_summary(trigger)
