@@ -129,8 +129,10 @@ ccns/
 ### `moss_tactics.py`
 - Semantic relevance ramp: `MOSS_SEM_THRESHOLD` (default 0.45) → `MOSS_SEM_FULL_RELEVANCE` (default 0.75)
 - Red-flag keyword hits add bonus (`MOSS_KEYWORD_BONUS`, default 0.15) but are **not required** for a match
-- Score = `max(prior, best_confidence + corroboration)`; corroboration +0.05/category (cap 0.15)
-- `flag_scam_signal` still uses `max(score, confidence)` — does not accumulate per repeated signal
+- **Score accumulates across turns** (replaces the old single-turn `max`): a single passive topic match is treated as suspicion, not proof, so one mention of e.g. "gift card" lands in the suspicious band, never instantly critical.
+  - Per turn: `turn_evidence = min(MOSS_SEM_TURN_CAP + corroboration, best_confidence + corroboration)` — caps how far one caller turn can move the score (`MOSS_SEM_TURN_CAP` default 0.45). Corroboration (+0.05/distinct category, cap 0.15) raises that ceiling when multiple categories match at once.
+  - Accumulate with diminishing returns: `score = prior + turn_evidence * (1 - prior)`, floored at `prior` so it never drops. Repeated payment pressure + deflection + urgency across turns escalate to critical (~3 turns); a one-off mention does not.
+- `flag_scam_signal` (LLM tool, `agent.py`) still uses `max(score, confidence)` — a deliberate behavioral judgment jumps the score immediately and does not accumulate per repeated signal.
 
 ---
 
@@ -172,6 +174,7 @@ MOSS_PROJECT_ID, MOSS_PROJECT_KEY, MOSS_INDEX_NAME, MOSS_MODEL_ID
 MOSS_SEM_THRESHOLD=0.45
 MOSS_SEM_FULL_RELEVANCE=0.75
 MOSS_KEYWORD_BONUS=0.15
+MOSS_SEM_TURN_CAP=0.45         # max score rise from one caller turn (accumulates across turns)
 DASHBOARD_PORT, DASHBOARD_INGEST_URL
 NOTIFY_SCORE_THRESHOLD=0.66
 HANGUP_SCORE_THRESHOLD=0.66
@@ -235,7 +238,7 @@ python scripts/demo_dashboard.py
 
 ## Open / next work
 
-1. **Additive scam score** — score plateaus on repeated signals; hangup covers persistence partially.
+1. ~~**Additive scam score**~~ — done: semantic path now caps per-turn evidence (`MOSS_SEM_TURN_CAP`) and accumulates across turns so a single topic match stays suspicious, not critical. Remaining: make `flag_scam_signal` accumulate per repeated LLM signal too (still `max`).
 2. **Known-contact banner** on Live tab when `call_start.contact` is set.
 3. **SIP/telephony hardening** — transfer failures, caller ID edge cases, exact `lk` CLI checklist.
 4. **Smarter claim-based interrogation** — dynamic verification per caller story.

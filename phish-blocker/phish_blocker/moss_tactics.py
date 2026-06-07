@@ -39,6 +39,13 @@ KEYWORD_BONUS = _env_float("MOSS_KEYWORD_BONUS", 0.15)
 CORROBORATION_PER_CATEGORY = 0.05
 CORROBORATION_CAP = 0.15
 
+# A single caller turn that merely touches a scam topic (e.g. saying "gift card")
+# is suspicion, not proof — a legit caller can mention the same topic. Cap how far
+# one turn of passive retrieval can move the score so it lands in the "suspicious"
+# band, never instantly "critical". Real scams reveal themselves over multiple
+# turns (payment demand + deflection + urgency), which then accumulate past the cap.
+SEM_TURN_CAP = _env_float("MOSS_SEM_TURN_CAP", 0.45)
+
 _STOPWORDS = {
     "the", "a", "an", "your", "you", "to", "of", "and", "or", "is", "are",
     "in", "on", "for", "me", "my", "i", "it", "they", "them", "this", "that",
@@ -173,7 +180,17 @@ def compute_scam_score(matches: list[TacticMatch], prior: float = 0.0) -> float:
         CORROBORATION_CAP,
         CORROBORATION_PER_CATEGORY * (len(distinct_categories) - 1),
     )
-    return min(1.0, max(prior, best.confidence + corroboration))
+
+    # Bound this turn's evidence: one passive topic match (or even several within a
+    # single turn) cannot by itself push past the cap into "critical". Matching
+    # multiple distinct categories at once raises the ceiling via corroboration.
+    turn_evidence = min(SEM_TURN_CAP + corroboration, best.confidence + corroboration)
+
+    # Accumulate with diminishing returns toward 1.0 so repeated signals and
+    # deflections across turns escalate to a confident verdict, while a single
+    # mention stays in the suspicious band and lets the screener interrogate first.
+    accumulated = prior + turn_evidence * (1.0 - prior)
+    return min(1.0, max(prior, accumulated))
 
 
 async def init_moss(index: str | None = None, model_id: str | None = None) -> bool:
