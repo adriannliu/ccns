@@ -39,18 +39,42 @@ def resident_phone() -> str | None:
     return f"+{digits}"
 
 
-def transfer_targets(phone: str) -> list[str]:
-    targets = [phone, f"tel:{phone}"]
-    domain = os.getenv("TWILIO_PSTN_DOMAIN", "").strip()
+def _pstn_domain() -> str | None:
+    raw = os.getenv("TWILIO_PSTN_DOMAIN", "").strip()
+    if not raw:
+        return None
+    return raw.removeprefix("sip:").split(";")[0]
+
+
+def transfer_attempts(phone: str) -> list[tuple[str, bool]]:
+    attempts: list[tuple[str, bool]] = [
+        (f"tel:{phone}", True),
+        (phone, True),
+        (f"tel:{phone}", False),
+        (phone, False),
+    ]
+    domain = _pstn_domain()
     if domain:
-        targets.append(f"sip:{phone}@{domain};transport=udp")
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for target in targets:
-        if target not in seen:
-            seen.add(target)
-            ordered.append(target)
-    return ordered
+        sip_targets = [
+            f"sip:{phone}@{domain};transport=udp",
+            f"sip:{phone}@{domain}",
+        ]
+        for target in sip_targets:
+            attempts.append((target, True))
+            attempts.append((target, False))
+    return attempts
+
+
+def _failure_hint() -> str:
+    if _pstn_domain():
+        return (
+            "On Twilio: Elastic SIP Trunk → enable Call Transfers and PSTN transfers."
+        )
+    return (
+        "Twilio usually needs a Termination domain: trunk → Termination → set a SIP "
+        "domain (yields name.pstn.twilio.com), add TWILIO_PSTN_DOMAIN to .env, and "
+        "enable Call Transfers + PSTN transfers on the trunk."
+    )
 
 
 def _caller_participant(job_ctx: JobContext) -> rtc.RemoteParticipant | None:
@@ -64,29 +88,45 @@ async def _cold_transfer(
     job_ctx: JobContext,
     participant: rtc.RemoteParticipant,
     phone: str,
-) -> str | None:
+) -> tuple[str | None, list[str]]:
     errors: list[str] = []
-    for target in transfer_targets(phone):
+    attrs = dict(participant.attributes)
+    logger.info(
+        "cold transfer participant=%s attrs=%s targets=%s",
+        participant.identity,
+        attrs,
+        [t for t, _ in transfer_attempts(phone)],
+    )
+
+    for target, play_dialtone in transfer_attempts(phone):
         try:
             await job_ctx.transfer_sip_participant(
                 participant,
                 target,
-                play_dialtone=True,
+                play_dialtone=play_dialtone,
             )
             logger.info(
-                "cold transfer ok for %s via %s",
+                "cold transfer ok for %s via %s (dialtone=%s)",
                 participant.identity,
                 target,
+                play_dialtone,
             )
-            return target
+            return target, errors
         except Exception as e:
-            msg = f"{target}: {e}"
+            msg = f"{target} dialtone={play_dialtone}: {e}"
             errors.append(msg)
             logger.warning("cold transfer attempt failed (%s)", msg)
 
     if errors:
         logger.warning("all cold transfer attempts failed: %s", "; ".join(errors))
-    return None
+    return None, errors
+
+
+def _format_failure(errors: list[str]) -> str:
+    detail = errors[-1] if errors else "unknown error"
+    if len(errors) > 1:
+        detail = f"{detail} (+{len(errors) - 1} other attempts)"
+    return f"{detail}. {_failure_hint()}"
 
 
 async def maybe_transfer_call(
@@ -143,13 +183,14 @@ async def maybe_transfer_call(
             state.transfer_started = False
             return
 
-    target = await _cold_transfer(job_ctx, participant, phone)
+    target, errors = await _cold_transfer(job_ctx, participant, phone)
     if target is None:
         await bus.push(
             {
                 "type": "transfer",
                 "status": "failed",
-                "error": "SIP REFER failed for all transfer targets",
+                "error": _format_failure(errors),
+                "attempts": errors,
             }
         )
         state.transfer_started = False
@@ -193,13 +234,14 @@ async def transfer_contact_call(
         }
     )
 
-    target = await _cold_transfer(job_ctx, participant, phone)
+    target, errors = await _cold_transfer(job_ctx, participant, phone)
     if target is None:
         await bus.push(
             {
                 "type": "transfer",
                 "status": "failed",
-                "error": "SIP REFER failed for all transfer targets",
+                "error": _format_failure(errors),
+                "attempts": errors,
             }
         )
         return False
