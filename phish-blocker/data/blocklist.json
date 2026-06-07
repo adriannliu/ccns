@@ -1,15 +1,15 @@
 [
   {
-    "phone": "+14085053235",
-    "first_flagged_at": "2026-06-07T15:32:02+00:00",
-    "last_flagged_at": "2026-06-07T15:32:02+00:00",
+    "phone": "+14087726889",
+    "first_flagged_at": "2026-06-07T15:57:10+00:00",
+    "last_flagged_at": "2026-06-07T15:57:10+00:00",
     "flag_count": 1,
     "recommendation": "block",
-    "reason": "Flagged for Gift-card payment demand and related risk signals.",
-    "scam_score": 0.768,
+    "reason": "Flagged for IRS gift-card payment demand and related risk signals.",
+    "scam_score": 1.0,
     "signals": [
-      "Gift-card payment demand",
-      "Lottery/prize advance fee"
+      "Name-fishing ('guess who')",
+      "IRS gift-card payment demand"
     ]
   }
 ]
