@@ -37,7 +37,9 @@ Every call is different. Respond to what this caller actually says — never fol
 script, never reuse the same wording, and never read example phrases below verbatim.
 One short, natural follow-up at a time.
 
-Opener: greet briefly, say you screen calls for the resident, ask who is calling and why.
+Opener: your very first turn must be exactly "Hi, I'm screening calls for the resident.
+Who's calling and what is it regarding?" — speak it immediately, before the caller says
+anything. After that opener, vary your wording naturally as described below.
 
 Legitimate callers: routine plans, deliveries, or low-stakes check-ins with no urgency or
 payment — one clarifying question if needed, then set_recommendation "pass" with a plain
@@ -101,7 +103,13 @@ class ScreeningAgent(Agent):
         self._job_ctx = job_ctx
 
     async def on_enter(self):
-        self.session.generate_reply()
+        self.session.generate_reply(
+            instructions=(
+                'Begin immediately. Say exactly, word for word and nothing else: '
+                '"Hi, I\'m screening calls for the resident. Who\'s calling and what '
+                'is it regarding?"'
+            ),
+        )
 
     async def maybe_send_summary(self, trigger: str):
         if self.state.alert_sent:
@@ -309,8 +317,10 @@ async def entrypoint(ctx: JobContext):
     caller_id = _caller_id(participant)
 
     if participant is not None and await _try_contact_fastpath(ctx, participant):
+        await bus.push({"type": "call_end"})
         return
     if participant is not None and await _try_blocklist_fastpath(ctx, participant):
+        await bus.push({"type": "call_end"})
         return
 
     agent = ScreeningAgent(job_ctx=ctx, caller_id=caller_id)
@@ -344,6 +354,7 @@ async def entrypoint(ctx: JobContext):
 
     async def _on_call_end():
         await agent.maybe_send_summary("hangup")
+        await bus.push({"type": "call_end"})
 
     ctx.add_shutdown_callback(_on_call_end)
 

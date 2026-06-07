@@ -35,6 +35,7 @@ SCRIPT = [
         "scam_score": 0.95,
         "signals": ["IRS back-taxes arrest threat", "IRS gift-card payment demand", "Urgency / time pressure"],
     }},
+    {"type": "call_end"},
 ]
 
 

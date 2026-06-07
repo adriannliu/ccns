@@ -82,7 +82,13 @@
   }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   .dot.live { background: var(--green); box-shadow: 0 0 10px var(--green); animation: blink 1.4s ease-in-out infinite; }
+  .dot.ended { background: var(--muted); }
   @keyframes blink { 50% { opacity: .35; } }
+
+  @keyframes ring {
+    0% { box-shadow: 0 0 0 0 rgba(255,77,94,.55); }
+    100% { box-shadow: 0 0 0 14px rgba(255,77,94,0); }
+  }
 
   .view { display: none; position: relative; z-index: 1; min-height: 0; }
   .view.active { display: grid; }
@@ -263,6 +269,14 @@
   }
   .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
   .toast.ok { border-color: rgba(46,230,160,.5); color: var(--green); }
+  .toast.danger {
+    top: 18px; bottom: auto;
+    background: linear-gradient(180deg, #2a1116, #1d0d11);
+    border-color: rgba(255,77,94,.6); color: var(--red);
+    font-weight: 800; letter-spacing: .12em; text-transform: uppercase; font-size: 14px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.5), 0 0 30px rgba(255,77,94,.25);
+  }
+  .toast.danger.show { transform: translateX(-50%) translateY(0); }
 </style>
 </head>
 <body>
@@ -370,6 +384,16 @@
     return { name: "LOW", label: "Low Risk", color: "var(--green)" };
   }
 
+  let alerted = false;
+  let alertTimer = null;
+  function showAlert(msg) {
+    const t = $("toast");
+    t.textContent = msg || "Unwanted activity detected";
+    t.className = "toast danger show";
+    clearTimeout(alertTimer);
+    alertTimer = setTimeout(() => { t.className = "toast"; }, 5000);
+  }
+
   function setScore(s) {
     s = Math.max(0, Math.min(1, s));
     const pct = Math.round(s * 100);
@@ -382,6 +406,10 @@
     pill.dataset.level = lv.name;
     pill.textContent = lv.label;
     $("gaugePanel").classList.toggle("alert", lv.name === "CRITICAL");
+    if (lv.name === "CRITICAL" && !alerted) {
+      alerted = true;
+      showAlert("Unwanted activity detected");
+    }
   }
 
   function addTurn(role, text) {
@@ -571,14 +599,22 @@
     ws.onmessage = (m) => {
       const e = JSON.parse(m.data);
       if (e.type === "call_start") {
-        $("dot").classList.add("live");
+        alerted = false;
+        $("toast").className = "toast";
+        $("dot").className = "dot live";
         $("status").textContent = e.blocklist_hit ? "Blocked repeat caller" : "Call in progress";
         $("transcript").innerHTML = "";
         $("chips").innerHTML = '<div class="empty">No tactics matched yet.</div>';
         setScore(0);
         setVerdict("", "");
         $("verdict").textContent = "SCREENING…";
-        if (e.blocklist_hit) setVerdict("block", "Known scam source — call rejected");
+        if (e.blocklist_hit) {
+          setVerdict("block", "Known scam source — call rejected");
+          showAlert("Unwanted activity detected");
+        }
+      } else if (e.type === "call_end") {
+        $("dot").className = "dot ended";
+        $("status").textContent = "Call ended — standby";
       } else if (e.type === "history_entry") {
         upsertHistoryEntry(e.entry);
       } else if (e.type === "history_removed") {
@@ -591,6 +627,7 @@
       } else if (e.type === "verdict") {
         if (typeof e.scam_score === "number") setScore(e.scam_score);
         setVerdict(e.recommendation, e.reason);
+        if (e.recommendation === "block") showAlert("Unwanted activity detected");
       } else if (e.type === "transfer") {
         const v = $("verdict");
         if (e.status === "initiated") {

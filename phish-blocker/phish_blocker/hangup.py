@@ -8,8 +8,9 @@ from phish_blocker.notify import _default_reason, should_hangup
 logger = logging.getLogger("phish-blocker.hangup")
 
 _GOODBYE = (
-    "This call cannot be connected. Say one brief polite sentence that you are "
-    "ending the call and say goodbye. Do not mention scores, systems, or tools."
+    "This call cannot be connected. In one brief, polite, natural turn, say that you "
+    "are ending the call, that if this is an emergency the host will reach back out, "
+    "wish them a good day, and say goodbye. Do not mention scores, systems, or tools."
 )
 
 
