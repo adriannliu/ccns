@@ -13,9 +13,29 @@ DEFAULT_MODEL = os.getenv("MOSS_MODEL_ID", "moss-minilm")
 DEFAULT_ALPHA = 0.6
 DEFAULT_TOP_K = 5
 
-SEM_THRESHOLD = 0.45
-SEVERITY_FLOOR = 0.6
+def _env_float(name: str, fallback: float, lo: float = 0.0, hi: float = 1.0) -> float:
+    raw = os.getenv(name)
+    if not raw:
+        return fallback
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return fallback
+    return max(lo, min(hi, value))
+
+
+# Semantic relevance (Moss retrieval score) drives the score. Below SEM_THRESHOLD a
+# tactic is treated as irrelevant; at/above SEM_FULL_RELEVANCE it counts as a full match.
+# The ramp between maps raw retrieval scores onto a 0..1 relevance weight. Both are
+# tunable via env to match the scale your Moss index returns.
+SEM_THRESHOLD = _env_float("MOSS_SEM_THRESHOLD", 0.45)
+SEM_FULL_RELEVANCE = _env_float("MOSS_SEM_FULL_RELEVANCE", 0.75)
+# Guard against an inverted or degenerate ramp (floor must sit below the ceiling).
+if SEM_FULL_RELEVANCE <= SEM_THRESHOLD:
+    SEM_FULL_RELEVANCE = min(1.0, SEM_THRESHOLD + 0.01)
+# Explicit red-flag phrasing corroborates a semantic match but is never required.
 KEYWORD_FULL_CONF_AT = 2
+KEYWORD_BONUS = _env_float("MOSS_KEYWORD_BONUS", 0.15)
 CORROBORATION_PER_CATEGORY = 0.05
 CORROBORATION_CAP = 0.15
 
@@ -55,7 +75,7 @@ class RetrievalResult:
 
     def to_signal_event(self) -> dict | None:
         top = self.top_match
-        if top is None or not top.matched_red_flags:
+        if top is None or top.confidence <= 0.0:
             return None
         return {
             "type": "signal",
@@ -91,10 +111,24 @@ def matched_red_flags(caller_text: str, red_flags: list[str]) -> list[str]:
     return hits
 
 
+def _semantic_relevance(retrieval_score: float) -> float:
+    """Map a raw Moss retrieval score onto a 0..1 relevance weight."""
+    if retrieval_score <= SEM_THRESHOLD:
+        return 0.0
+    if retrieval_score >= SEM_FULL_RELEVANCE:
+        return 1.0
+    return (retrieval_score - SEM_THRESHOLD) / (SEM_FULL_RELEVANCE - SEM_THRESHOLD)
+
+
 def _build_match(caller_text: str, tactic: Tactic, retrieval_score: float) -> TacticMatch:
     hits = matched_red_flags(caller_text, tactic.red_flags)
+
+    # Confidence is driven by how strongly the caller's words semantically match this
+    # tactic, scaled by its severity. Explicit red-flag phrasing only nudges it upward.
+    relevance = _semantic_relevance(retrieval_score)
     keyword_conf = min(1.0, len(hits) / KEYWORD_FULL_CONF_AT)
-    confidence = tactic.severity * (SEVERITY_FLOOR + (1.0 - SEVERITY_FLOOR) * keyword_conf)
+    match_strength = min(1.0, relevance + KEYWORD_BONUS * keyword_conf)
+    confidence = tactic.severity * match_strength
 
     if hits:
         flags = ", ".join(f'"{h}"' for h in hits)
@@ -104,8 +138,8 @@ def _build_match(caller_text: str, tactic: Tactic, retrieval_score: float) -> Ta
         )
     else:
         explanation = (
-            f"Semantically resembles known scam tactic '{tactic.label}' "
-            f"({tactic.source}), but no explicit red-flag phrasing detected."
+            f"Caller's words semantically match known scam tactic '{tactic.label}' "
+            f"({tactic.source}) without verbatim red-flag phrasing."
         )
 
     return TacticMatch(
@@ -124,15 +158,17 @@ def _build_match(caller_text: str, tactic: Tactic, retrieval_score: float) -> Ta
 
 
 def compute_scam_score(matches: list[TacticMatch], prior: float = 0.0) -> float:
-    confirmed = [
+    # Any semantically relevant tactic contributes, whether or not the caller used a
+    # literal red-flag phrase. Confidence already reflects semantic match strength.
+    relevant = [
         m for m in matches
-        if m.matched_red_flags and m.retrieval_score >= SEM_THRESHOLD
+        if m.retrieval_score >= SEM_THRESHOLD and m.confidence > 0.0
     ]
-    if not confirmed:
+    if not relevant:
         return prior
 
-    best = max(confirmed, key=lambda m: m.confidence)
-    distinct_categories = {m.category for m in confirmed}
+    best = max(relevant, key=lambda m: m.confidence)
+    distinct_categories = {m.category for m in relevant}
     corroboration = min(
         CORROBORATION_CAP,
         CORROBORATION_PER_CATEGORY * (len(distinct_categories) - 1),
