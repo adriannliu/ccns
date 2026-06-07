@@ -6,7 +6,7 @@ from pathlib import Path
 
 from aiohttp import WSMsgType, web
 
-from phish_blocker import blocklist
+from phish_blocker import blocklist, contacts
 
 logger = logging.getLogger("phish-blocker.dashboard")
 
@@ -57,11 +57,57 @@ async def _history(request: web.Request):
     return web.json_response({"entries": blocklist.list_history()})
 
 
+async def _history_remove(request: web.Request):
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+
+    phone = body.get("phone")
+    removed = blocklist.remove(phone)
+    if removed is None:
+        return web.json_response({"ok": False, "error": "not found"}, status=404)
+
+    await push({"type": "history_removed", "phone": removed["phone"]})
+    return web.json_response({"ok": True, "removed": removed})
+
+
+async def _history_verify(request: web.Request):
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+
+    phone = body.get("phone")
+    removed = blocklist.remove(phone)
+    if removed is None:
+        return web.json_response({"ok": False, "error": "not found"}, status=404)
+
+    contact = None
+    if body.get("add_to_contacts"):
+        name = (body.get("name") or "").strip()
+        if not name:
+            return web.json_response(
+                {"ok": False, "error": "name required when add_to_contacts is true"},
+                status=400,
+            )
+        contact = contacts.add(
+            phone,
+            name=name,
+            relationship=body.get("relationship") or "",
+        )
+
+    await push({"type": "history_removed", "phone": removed["phone"]})
+    return web.json_response({"ok": True, "removed": removed, "contact": contact})
+
+
 def build_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/", _index)
     app.router.add_get("/ws", _ws_handler)
     app.router.add_get("/api/history", _history)
+    app.router.add_delete("/api/history", _history_remove)
+    app.router.add_post("/api/history/verify", _history_verify)
     app.router.add_post("/ingest", _ingest)
     app.router.add_static("/static", STATIC_DIR)
     return app

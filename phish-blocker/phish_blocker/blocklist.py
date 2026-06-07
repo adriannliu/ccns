@@ -119,6 +119,20 @@ def list_history() -> list[dict]:
     return [e.to_dict() for e in rows]
 
 
+def remove(number: str | None) -> dict | None:
+    key = normalize(number)
+    if key is None:
+        return None
+    if not _loaded:
+        load_blocklist()
+    entry = _by_phone.pop(key, None)
+    if entry is None:
+        return None
+    _save()
+    logger.info("blocklist removed %s", key)
+    return entry.to_dict()
+
+
 def record(
     number: str | None,
     *,

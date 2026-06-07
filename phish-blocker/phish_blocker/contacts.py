@@ -72,6 +72,40 @@ def lookup(number: str | None) -> Contact | None:
     return _by_number.get(key)
 
 
+def _save() -> None:
+    rows = [
+        {
+            "name": c.name,
+            "phone": c.phone,
+            "relationship": c.relationship,
+        }
+        for c in sorted(_by_number.values(), key=lambda c: c.name.lower())
+    ]
+    _CONTACTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(_CONTACTS_PATH, "w", encoding="utf-8") as f:
+        json.dump(rows, f, indent=2)
+        f.write("\n")
+
+
+def add(
+    number: str,
+    name: str,
+    relationship: str = "",
+) -> dict | None:
+    key = normalize(number)
+    if key is None:
+        return None
+    if not _loaded:
+        load_contacts()
+
+    clean_name = name.strip() or "Unknown"
+    contact = Contact(name=clean_name, phone=key, relationship=relationship.strip())
+    _by_number[key] = contact
+    _save()
+    logger.info("contacts added %s (%s)", key, clean_name)
+    return {"name": contact.name, "phone": contact.phone, "relationship": contact.relationship}
+
+
 if __name__ == "__main__":
     import sys
 
