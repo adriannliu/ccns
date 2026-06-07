@@ -19,7 +19,11 @@ from livekit.plugins import aws, silero
 from phish_blocker import blocklist, bus, contacts
 from phish_blocker.moss_tactics import init_moss, retrieve_tactics
 from phish_blocker.hangup import maybe_hangup_call
-from phish_blocker.notify import hangup_threshold, send_call_summary
+from phish_blocker.notify import (
+    decision_cap,
+    hangup_threshold,
+    send_call_summary,
+)
 from phish_blocker.transfer import (
     maybe_transfer_call,
     transfer_contact_call,
@@ -56,9 +60,10 @@ Adapt to their story; examples of the KIND of detail to seek (not lines to recit
 - Tech support — ticket or case reference from their organization
 - Prize / sweepstakes — entry or confirmation detail for what they mention
 
-Give the caller a few chances to justify themselves: even when a turn looks suspicious,
-ask at least a couple of focused verification follow-ups before concluding it is a scam.
-A single alarming statement is grounds to probe, not yet to block.
+Be decisive and fast: you have at most two exchanges with the caller before you must
+commit. Use your follow-ups to settle pass vs. block quickly, and call set_recommendation
+as soon as you can justify a verdict rather than dragging the call out. A single alarming
+statement is grounds to probe, not yet to block.
 
 Deflection is a strong risk signal. If they dodge, cite policy, or change subject instead
 of answering across these follow-ups, call flag_scam_signal("refused verification", 0.85)
@@ -159,7 +164,7 @@ class ScreeningAgent(Agent):
         self.state.blocklist_recorded = True
         await bus.push({"type": "history_entry", "entry": entry})
 
-    async def maybe_hangup(self, trigger: str, force: bool = False):
+    async def maybe_hangup(self, trigger: str, force: bool = False, bypass_grace: bool = False):
         await maybe_hangup_call(
             session=self.session,
             job_ctx=self._job_ctx,
@@ -167,6 +172,7 @@ class ScreeningAgent(Agent):
             trigger=trigger,
             send_summary=self.maybe_send_summary,
             force=force,
+            bypass_grace=bypass_grace,
         )
 
     def _track_elevated_turn(self):
@@ -213,6 +219,48 @@ class ScreeningAgent(Agent):
         # same topic ("gift card"). Let the grace period + score gating decide,
         # so a single passive match never forces an immediate teardown.
         await self.maybe_hangup("threshold")
+
+        # Hard cap: stop interrogating once the caller has had enough exchanges and
+        # commit to a verdict now — block (hang up) or pass (forward).
+        await self._enforce_decision_cap()
+
+    async def _enforce_decision_cap(self):
+        # Only the screening loop has an open decision; a terminal verdict already
+        # in flight (teardown or cold transfer) must not be second-guessed here.
+        if self.state.hangup_started or self.state.transfer_started:
+            return
+        if self.state.caller_turns < decision_cap():
+            return
+
+        # Cap reached: a high running score ends the call, anything below forwards
+        # it. This is the committed decision point, so it bypasses the grace floor.
+        if self.state.scam_score >= hangup_threshold():
+            self.state.recommendation = "block"
+            if not self.state.reason:
+                self.state.reason = (
+                    f"Reached the {decision_cap()}-exchange screening limit with an "
+                    f"unresolved risk score of {round(self.state.scam_score * 100)}%."
+                )
+            await self.maybe_hangup("decision_cap", force=True, bypass_grace=True)
+            return
+
+        self.state.recommendation = "pass"
+        if not self.state.reason:
+            self.state.reason = (
+                f"Reached the {decision_cap()}-exchange screening limit with no scam "
+                "signals; connecting the caller."
+            )
+        # Clear the risk gauge to reflect the pass, mirroring set_recommendation.
+        self.state.scam_score = min(self.state.scam_score, 0.1)
+        await bus.push(
+            {
+                "type": "verdict",
+                "recommendation": "pass",
+                "reason": self.state.reason,
+                "scam_score": self.state.scam_score,
+            }
+        )
+        await self.maybe_transfer("decision_cap")
 
     @function_tool
     async def flag_scam_signal(

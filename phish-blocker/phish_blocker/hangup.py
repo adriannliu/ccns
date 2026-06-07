@@ -42,6 +42,7 @@ async def maybe_hangup_call(
     trigger: str,
     send_summary,
     force: bool = False,
+    bypass_grace: bool = False,
 ) -> None:
     if state.hangup_started:
         return
@@ -55,8 +56,9 @@ async def maybe_hangup_call(
     # Hard floor: always give the caller a few chances to justify themselves
     # before ANY hang-up, even a forced one. A single alarming line ("gift card")
     # is grounds to interrogate, not to immediately tear down the call. Force only
-    # bypasses the score check below, never this grace window.
-    if getattr(state, "caller_turns", 0) < min_caller_turns():
+    # bypasses the score check below, never this grace window — the sole exception
+    # is the decision cap (bypass_grace), which IS the committed verdict point.
+    if not bypass_grace and getattr(state, "caller_turns", 0) < min_caller_turns():
         logger.info(
             "hang-up deferred (%s): caller_turns=%d < min=%d",
             trigger,

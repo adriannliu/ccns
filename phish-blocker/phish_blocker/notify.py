@@ -8,6 +8,11 @@ _DEFAULT_HANGUP_EXCHANGES = 2
 # Caller turns that must elapse before ANY score-driven hang-up. Gives the caller
 # a few chances to justify themselves before detection can end the call.
 _DEFAULT_MIN_CALLER_TURNS = 3
+# Hard ceiling on interrogation length. Once the caller has had this many genuine
+# exchanges, the screener stops asking questions and commits to a verdict — block
+# (hang up) if the running score is at/above the hang-up threshold, otherwise pass
+# (forward). Keeps calls short instead of letting the screener probe indefinitely.
+_DEFAULT_DECISION_CAP = 2
 
 
 def _parse_threshold(raw: str | None, fallback: float) -> float:
@@ -52,6 +57,16 @@ def min_caller_turns() -> int:
         return max(0, int(raw))
     except (TypeError, ValueError):
         return _DEFAULT_MIN_CALLER_TURNS
+
+
+def decision_cap() -> int:
+    raw = os.getenv("DECISION_MAX_EXCHANGES")
+    if not raw:
+        return _DEFAULT_DECISION_CAP
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return _DEFAULT_DECISION_CAP
 
 
 def should_hangup(
