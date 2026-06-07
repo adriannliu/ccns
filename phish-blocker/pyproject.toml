@@ -3,7 +3,7 @@ name = "phish-blocker"
 version = "0.1.0"
 description = "AI call screener — LiveKit + Amazon Nova Sonic"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "livekit-agents[aws,silero]~=1.5",
     "livekit-plugins-aws[realtime]~=1.5",
