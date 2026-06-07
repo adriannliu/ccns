@@ -17,7 +17,7 @@ from livekit.plugins import aws, silero
 
 from phish_blocker import bus
 from phish_blocker.moss_tactics import init_moss, retrieve_tactics
-from phish_blocker.notify import send_screening_alert
+from phish_blocker.notify import send_call_summary
 
 load_dotenv()
 logger = logging.getLogger("phish-blocker")
@@ -90,8 +90,22 @@ class ScreeningAgent(Agent):
     async def on_enter(self):
         self.session.generate_reply()
 
+    async def maybe_send_summary(self, trigger: str):
+        if self.state.alert_sent:
+            return
+        sent = await send_call_summary(
+            scam_score=self.state.scam_score,
+            signals=list(self.state.signals),
+            recommendation=self.state.recommendation,
+            reason=self.state.reason,
+            trigger=trigger,
+        )
+        if sent:
+            self.state.alert_sent = True
+
     async def screen_caller_text(self, text: str):
-        result = await retrieve_tactics(text, prior=self.state.scam_score)
+        prior = self.state.scam_score
+        result = await retrieve_tactics(text, prior=prior)
         self.state.scam_score = result.scam_score
 
         top = result.top_match
@@ -103,6 +117,8 @@ class ScreeningAgent(Agent):
             self.state.seen_tactics.add(top.tactic_id)
             self.state.signals.append({"label": top.label, "confidence": top.confidence})
             await bus.push(event)
+
+        await self.maybe_send_summary("threshold")
 
     @function_tool
     async def flag_scam_signal(
@@ -128,6 +144,7 @@ class ScreeningAgent(Agent):
                 "scam_score": self.state.scam_score,
             }
         )
+        await self.maybe_send_summary("threshold")
         return "Recorded."
 
     @function_tool
@@ -156,15 +173,7 @@ class ScreeningAgent(Agent):
             }
         )
 
-        if recommendation == "block" and not self.state.alert_sent:
-            self.state.alert_sent = True
-            await send_screening_alert(
-                recommendation=recommendation,
-                reason=reason,
-                scam_score=self.state.scam_score,
-                signals=list(self.state.signals),
-            )
-
+        await self.maybe_send_summary("threshold")
         return "Verdict set."
 
 
@@ -203,6 +212,11 @@ async def entrypoint(ctx: JobContext):
         )
         if role == "caller":
             asyncio.create_task(agent.screen_caller_text(text))
+
+    async def _on_call_end():
+        await agent.maybe_send_summary("hangup")
+
+    ctx.add_shutdown_callback(_on_call_end)
 
     await bus.push({"type": "call_start"})
     await session.start(agent=agent, room=ctx.room)

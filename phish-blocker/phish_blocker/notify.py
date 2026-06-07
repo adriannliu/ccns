@@ -7,6 +7,16 @@ logger = logging.getLogger("phish-blocker.notify")
 
 _TWILIO_API = "https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
 _SMS_MAX = 1500
+_DEFAULT_THRESHOLD = 0.66
+
+
+def score_threshold() -> float:
+    raw = os.getenv("NOTIFY_SCORE_THRESHOLD", str(_DEFAULT_THRESHOLD))
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_THRESHOLD
+    return max(0.0, min(1.0, value))
 
 
 def _configured() -> bool:
@@ -23,18 +33,46 @@ def _configured() -> bool:
     return True
 
 
+def _infer_recommendation(scam_score: float, recommendation: str) -> str:
+    if recommendation in ("block", "challenge", "pass"):
+        if recommendation != "pass":
+            return recommendation
+    if scam_score >= 0.85:
+        return "block"
+    if scam_score >= score_threshold():
+        return "challenge"
+    return "pass"
+
+
+def _default_reason(signals: list[dict], scam_score: float) -> str:
+    if not signals:
+        pct = round(scam_score * 100)
+        return f"Call screening ended with risk score {pct}%."
+    top = max(signals, key=lambda s: s.get("confidence", 0))
+    label = top.get("label", "suspicious activity")
+    return f"Flagged for {label} and related risk signals."
+
+
 def _format_body(
     recommendation: str,
     reason: str,
     scam_score: float,
     signals: list[dict],
+    trigger: str,
 ) -> str:
     pct = round(scam_score * 100)
-    title = "BLOCKED" if recommendation == "block" else "FLAGGED"
+    if recommendation == "block":
+        title = "BLOCKED"
+    elif recommendation == "challenge":
+        title = "FLAGGED"
+    else:
+        title = "SCREENED"
+
+    when = "during the call" if trigger == "threshold" else "after the call ended"
     lines = [
-        f"Phish-Blocker: call {title} (risk {pct}%)",
+        f"Phish-Blocker: call {title} (risk {pct}%) — alert sent {when}.",
         "",
-        reason.strip() or "No summary provided.",
+        reason.strip() or _default_reason(signals, scam_score),
     ]
     labels = []
     for sig in signals:
@@ -56,31 +94,43 @@ def _format_body(
     return body
 
 
-async def send_screening_alert(
+def should_notify(
+    scam_score: float,
     recommendation: str,
-    reason: str,
+    signals: list[dict],
+    trigger: str,
+) -> bool:
+    threshold = score_threshold()
+    if scam_score >= threshold:
+        return True
+    if recommendation in ("block", "challenge"):
+        return True
+    if trigger == "hangup" and signals and scam_score >= threshold * 0.5:
+        return True
+    return False
+
+
+async def send_call_summary(
     scam_score: float,
     signals: list[dict],
+    recommendation: str = "pass",
+    reason: str = "",
+    trigger: str = "threshold",
 ) -> bool:
-    if recommendation not in ("block", "challenge"):
-        return False
-
-    notify_challenge = os.getenv("NOTIFY_ON_CHALLENGE", "").lower() in (
-        "1",
-        "true",
-        "yes",
-    )
-    if recommendation == "challenge" and not notify_challenge:
+    if not should_notify(scam_score, recommendation, signals, trigger):
         return False
 
     if not _configured():
         return False
 
+    rec = _infer_recommendation(scam_score, recommendation)
+    summary_reason = reason.strip() or _default_reason(signals, scam_score)
+    body = _format_body(rec, summary_reason, scam_score, signals, trigger)
+
     account_sid = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
     auth_token = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
     from_number = os.getenv("TWILIO_SMS_FROM", "").strip()
     to_number = os.getenv("NOTIFY_PHONE_NUMBER", "").strip()
-    body = _format_body(recommendation, reason, scam_score, signals)
 
     url = _TWILIO_API.format(sid=account_sid)
     payload = {"To": to_number, "From": from_number, "Body": body}
@@ -95,7 +145,12 @@ async def send_screening_alert(
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
                 if resp.status in (200, 201):
-                    logger.info("SMS alert sent to %s (%s)", to_number, recommendation)
+                    logger.info(
+                        "SMS summary sent to %s (trigger=%s score=%.2f)",
+                        to_number,
+                        trigger,
+                        scam_score,
+                    )
                     return True
                 text = await resp.text()
                 logger.warning(
