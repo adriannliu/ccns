@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import re
@@ -82,6 +83,41 @@ def _caller_participant(job_ctx: JobContext) -> rtc.RemoteParticipant | None:
         if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
             return participant
     return None
+
+
+async def _ensure_call_active(
+    job_ctx: JobContext,
+    participant: rtc.RemoteParticipant,
+    timeout: float = 10.0,
+) -> bool:
+    # transfer_sip_participant (SIP REFER) is rejected with "can't transfer non
+    # established call" until sip.callStatus is "active". The screening path makes
+    # the call active implicitly when AgentSession publishes audio; the contact
+    # fast-path has no session, so it must answer the call here first.
+    if participant.attributes.get("sip.callStatus") == "active":
+        return True
+
+    await job_ctx.connect()
+
+    try:
+        source = rtc.AudioSource(24000, 1)
+        track = rtc.LocalAudioTrack.create_audio_track("transfer-answer", source)
+        options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        await job_ctx.room.local_participant.publish_track(track, options)
+    except Exception as e:
+        logger.warning("answer publish_track failed: %s", e)
+
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if participant.attributes.get("sip.callStatus") == "active":
+            return True
+        await asyncio.sleep(0.1)
+
+    logger.warning(
+        "SIP call not active before transfer (status=%s)",
+        participant.attributes.get("sip.callStatus"),
+    )
+    return False
 
 
 async def _cold_transfer(
@@ -233,6 +269,8 @@ async def transfer_contact_call(
             "reason": f"Known contact: {contact_name}",
         }
     )
+
+    await _ensure_call_active(job_ctx, participant)
 
     target, errors = await _cold_transfer(job_ctx, participant, phone)
     if target is None:
