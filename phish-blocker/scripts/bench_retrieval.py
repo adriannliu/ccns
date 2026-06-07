@@ -8,6 +8,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import phish_blocker  # noqa: F401 — installs SSL cert bundle for Moss HTTPS
+
 from dotenv import load_dotenv
 from moss import MossClient, QueryOptions
 

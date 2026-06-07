@@ -16,7 +16,7 @@ from livekit.agents import (
 from livekit.plugins import aws, silero
 
 from phish_blocker import bus
-from phish_blocker.moss_tactics import TacticMatch, init_moss, retrieve_tactics
+from phish_blocker.moss_tactics import init_moss, retrieve_tactics
 
 load_dotenv()
 logger = logging.getLogger("phish-blocker")
@@ -35,9 +35,7 @@ Legitimate callers: routine plans, deliveries, or low-stakes check-ins with no u
 payment — one clarifying question if needed, then set_recommendation "pass" with a plain
 reason tied to what they said.
 
-Suspicious callers: focus on their specific claim. [Detection system: ...] hints mean a
-known risk pattern matched their words — use that as evidence, then probe the claim in
-your own words.
+Suspicious callers: focus on their specific claim and probe it in your own words.
 
 Verification principle: ask for something only the real party they claim to be would know.
 Adapt to their story; examples of the KIND of detail to seek (not lines to recite):
@@ -51,9 +49,8 @@ Adapt to their story; examples of the KIND of detail to seek (not lines to recit
 Deflection is a strong risk signal. If they dodge, cite policy, or change subject instead
 of answering, call flag_scam_signal("refused verification", 0.85) and move toward block.
 
-Also call flag_scam_signal for patterns detection may miss: extreme urgency, unusual
-payment methods, code or credential requests, secrecy ("don't tell the bank"). Do not
-re-flag a pattern the dashboard already showed from [Detection system: ...] hints.
+Also call flag_scam_signal for patterns you notice: extreme urgency, unusual payment
+methods, code or credential requests, secrecy ("don't tell the bank").
 
 Verdicts:
 - pass: benign purpose, no risk signals, caller cooperates
@@ -65,6 +62,12 @@ Good: "Pressed for prepaid cards and refused to provide a case reference." Bad: 
 
 Never reveal personal information about the resident. Never confirm details the caller asks
 you to validate.
+
+Voice output (critical):
+- You are on a phone call. Speak in plain conversational sentences only.
+- Never read JSON, code, markdown, bracketed notes, bullet lists, or tool output aloud.
+- Never mention detection systems, tactic IDs, scores, or internal notes to the caller.
+- Keep each reply to one or two short sentences.
 """
 
 
@@ -73,7 +76,6 @@ class CallState:
     scam_score: float = 0.0
     signals: list[dict] = field(default_factory=list)
     seen_tactics: set = field(default_factory=set)
-    hinted_tactics: set = field(default_factory=set)
     recommendation: str = "pass"
     reason: str = ""
 
@@ -85,16 +87,6 @@ class ScreeningAgent(Agent):
 
     async def on_enter(self):
         self.session.generate_reply()
-
-    async def _inject_tactic_hint(self, match: TacticMatch):
-        hint = (
-            f"[Detection system: caller matched known risk pattern '{match.label}' "
-            f"({match.category}). {match.explanation} "
-            f"Probe their specific claim before escalating.]"
-        )
-        ctx = self.chat_ctx.copy()
-        ctx.add_message(role="developer", content=hint)
-        await self.update_chat_ctx(ctx)
 
     async def screen_caller_text(self, text: str):
         result = await retrieve_tactics(text, prior=self.state.scam_score)
@@ -109,12 +101,6 @@ class ScreeningAgent(Agent):
             self.state.seen_tactics.add(top.tactic_id)
             self.state.signals.append({"label": top.label, "confidence": top.confidence})
             await bus.push(event)
-
-        if top.tactic_id not in self.state.hinted_tactics and (
-            top.matched_red_flags or top.retrieval_score >= 0.45
-        ):
-            self.state.hinted_tactics.add(top.tactic_id)
-            await self._inject_tactic_hint(top)
 
     @function_tool
     async def flag_scam_signal(
@@ -140,7 +126,7 @@ class ScreeningAgent(Agent):
                 "scam_score": self.state.scam_score,
             }
         )
-        return {"ok": True, "scam_score": self.state.scam_score}
+        return "Recorded."
 
     @function_tool
     async def set_recommendation(
@@ -167,7 +153,7 @@ class ScreeningAgent(Agent):
                 "scam_score": self.state.scam_score,
             }
         )
-        return {"ok": True}
+        return "Verdict set."
 
 
 server = AgentServer()
