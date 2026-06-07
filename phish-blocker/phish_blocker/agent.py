@@ -372,7 +372,13 @@ async def _speak_goodbye_and_hangup(ctx: JobContext, line: str) -> None:
     try:
         await session.start(agent=Agent(instructions=_FAREWELL_PERSONA), room=ctx.room)
         handle = session.generate_reply(instructions=line, allow_interruptions=False)
-        await handle
+        # Wait for the goodbye to finish playing before tearing down the room.
+        waiter = getattr(handle, "wait_for_playout", None)
+        if waiter is not None:
+            await waiter()
+        else:
+            await handle
+        await asyncio.sleep(1.0)
     except Exception as e:
         logger.warning("repeat-caller goodbye failed: %s", e)
     finally:

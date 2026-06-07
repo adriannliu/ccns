@@ -111,12 +111,15 @@ async def maybe_hangup_call(
 
 
 async def _speak_goodbye(session) -> None:
-    """Deliver the goodbye and wait for it to fully play out before teardown.
+    """Deliver the goodbye and wait for it to FULLY play out before teardown.
 
     The realtime model may already be answering the caller's last turn, so we
-    interrupt that first, then speak the goodbye and drain so the audio is not
-    cut off when the room is deleted.
+    interrupt that first so the goodbye is spoken first. Crucially we wait on
+    SpeechHandle.wait_for_playout() (not just `await handle`), otherwise the room
+    is deleted while the goodbye audio is still being streamed and the caller
+    never hears it.
     """
+    # Stop any reply the realtime model is already generating to the caller.
     try:
         res = session.interrupt()
         if inspect.isawaitable(res):
@@ -129,13 +132,22 @@ async def _speak_goodbye(session) -> None:
             instructions=_GOODBYE,
             allow_interruptions=False,
         )
-        await handle
     except Exception as e:
-        logger.warning("goodbye speech failed: %s", e)
+        logger.warning("goodbye generate_reply failed: %s", e)
         return
 
-    # Let the final audio frames flush out to the caller before we hang up.
+    # Wait until the audio has actually finished playing to the caller.
     try:
-        await asyncio.wait_for(session.drain(), timeout=15)
+        waiter = getattr(handle, "wait_for_playout", None)
+        if waiter is not None:
+            await waiter()
+        else:
+            await handle
     except Exception as e:
-        logger.debug("drain after goodbye: %s", e)
+        logger.warning("goodbye playout wait failed: %s", e)
+
+    # Small buffer so the final audio frames egress over SIP before we hang up.
+    try:
+        await asyncio.sleep(1.0)
+    except asyncio.CancelledError:
+        pass
