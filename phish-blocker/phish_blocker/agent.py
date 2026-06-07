@@ -101,7 +101,11 @@ class CallState:
     alert_sent: bool = False
     hangup_started: bool = False
     elevated_turns: int = 0
+    # caller_turns counts genuine back-and-forth exchanges (agent prompted, caller
+    # answered), NOT raw transcript items — the realtime model can split one caller
+    # monologue into several items, which would otherwise burn the grace window.
     caller_turns: int = 0
+    awaiting_caller: bool = False
     transfer_started: bool = False
     blocklist_recorded: bool = False
 
@@ -120,6 +124,12 @@ class ScreeningAgent(Agent):
                 'is it regarding?"'
             ),
         )
+
+    def note_agent_turn(self):
+        # The screener spoke (a prompt / question). The caller's next reply is a
+        # genuine chance to justify themselves.
+        if not self.state.hangup_started:
+            self.state.awaiting_caller = True
 
     async def maybe_send_summary(self, trigger: str):
         if self.state.alert_sent:
@@ -174,7 +184,11 @@ class ScreeningAgent(Agent):
         )
 
     async def screen_caller_text(self, text: str):
-        self.state.caller_turns += 1
+        # Count one exchange only when this caller reply follows an agent prompt, so a
+        # single monologue split across several items still counts as one chance.
+        if self.state.awaiting_caller:
+            self.state.caller_turns += 1
+            self.state.awaiting_caller = False
         prior = self.state.scam_score
         result = await retrieve_tactics(text, prior=prior)
         self.state.scam_score = result.scam_score
@@ -414,7 +428,9 @@ async def entrypoint(ctx: JobContext):
         asyncio.create_task(
             bus.push({"type": "transcript", "role": role, "text": text})
         )
-        if role == "caller":
+        if role == "agent":
+            agent.note_agent_turn()
+        else:
             asyncio.create_task(agent.screen_caller_text(text))
 
     async def _on_call_end():
