@@ -151,6 +151,18 @@ def _build_match(caller_text: str, tactic: Tactic, retrieval_score: float) -> Ta
     relevance = _semantic_relevance(retrieval_score)
     keyword_conf = min(1.0, len(hits) / KEYWORD_FULL_CONF_AT)
 
+    # A red-flag "hit" is only evidence when the caller's turn is also at least
+    # topically related to this tactic. Short, generic red-flag phrases collide with
+    # innocuous chatter — "buy cards" hits a caller buying basketball cards, "numbers
+    # on the back" hits a jersey number — and would otherwise surface a spurious gift-
+    # card risk factor on a benign call. When Moss puts the turn below the relevance
+    # floor (retrieval_score <= SEM_THRESHOLD, so relevance == 0), the overlap is
+    # coincidental token noise: drop it. A genuine gift-card demand is BOTH semantically
+    # close to the tactic AND uses its phrasing, so this never suppresses a real signal.
+    if relevance <= 0.0:
+        hits = []
+        keyword_conf = 0.0
+
     # Drop weak topic-overlap with no red-flag phrasing: it is nearest-neighbour noise
     # (e.g. small talk faintly matching a tech-support tactic), not evidence. Zeroing
     # relevance here removes it from both the score and the dashboard signal feed.
