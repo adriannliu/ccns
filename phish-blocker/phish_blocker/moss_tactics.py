@@ -55,7 +55,7 @@ class RetrievalResult:
 
     def to_signal_event(self) -> dict | None:
         top = self.top_match
-        if top is None:
+        if top is None or not top.matched_red_flags:
             return None
         return {
             "type": "signal",

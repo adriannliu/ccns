@@ -16,6 +16,7 @@ from livekit.agents import (
 from livekit.plugins import aws, silero
 
 from phish_blocker import bus
+from phish_blocker.moss_tactics import init_moss, retrieve_tactics
 
 load_dotenv()
 logger = logging.getLogger("phish-blocker")
@@ -49,6 +50,7 @@ Behavior:
 class CallState:
     scam_score: float = 0.0
     signals: list[dict] = field(default_factory=list)
+    seen_tactics: set = field(default_factory=set)
     recommendation: str = "pass"
     reason: str = ""
 
@@ -60,6 +62,21 @@ class ScreeningAgent(Agent):
 
     async def on_enter(self):
         self.session.generate_reply()
+
+    async def screen_caller_text(self, text: str):
+        result = await retrieve_tactics(text, prior=self.state.scam_score)
+        self.state.scam_score = result.scam_score
+
+        event = result.to_signal_event()
+        if event is None:
+            return
+
+        top = result.top_match
+        if top.tactic_id in self.state.seen_tactics:
+            return
+        self.state.seen_tactics.add(top.tactic_id)
+        self.state.signals.append({"label": top.label, "confidence": top.confidence})
+        await bus.push(event)
 
     @function_tool
     async def flag_scam_signal(
@@ -76,9 +93,7 @@ class ScreeningAgent(Agent):
         """
         confidence = max(0.0, min(1.0, confidence))
         self.state.signals.append({"label": label, "confidence": confidence})
-        self.state.scam_score = min(
-            1.0, max(self.state.scam_score, confidence, self.state.scam_score + 0.15)
-        )
+        self.state.scam_score = min(1.0, max(self.state.scam_score, confidence))
         await bus.push(
             {
                 "type": "signal",
@@ -124,6 +139,8 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     agent = ScreeningAgent()
 
+    await init_moss()
+
     region = os.getenv("AWS_DEFAULT_REGION") or os.getenv("AWS_REGION")
     llm_kwargs = {
         "voice": "matthew",
@@ -148,6 +165,8 @@ async def entrypoint(ctx: JobContext):
         asyncio.create_task(
             bus.push({"type": "transcript", "role": role, "text": text})
         )
+        if role == "caller":
+            asyncio.create_task(agent.screen_caller_text(text))
 
     await bus.push({"type": "call_start"})
     await session.start(agent=agent, room=ctx.room)
