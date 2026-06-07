@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
@@ -12,7 +13,7 @@ from livekit.agents import (
     cli,
     function_tool,
 )
-from livekit.plugins import openai, silero
+from livekit.plugins import aws, silero
 
 from phish_blocker import bus
 
@@ -123,9 +124,18 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     agent = ScreeningAgent()
 
+    region = os.getenv("AWS_DEFAULT_REGION") or os.getenv("AWS_REGION")
+    llm_kwargs = {
+        "voice": "matthew",
+        "turn_detection": "MEDIUM",
+        "tool_choice": "auto",
+    }
+    if region:
+        llm_kwargs["region"] = region
+
     session = AgentSession(
         vad=silero.VAD.load(),
-        llm=openai.realtime.RealtimeModel(voice="alloy"),
+        llm=aws.realtime.RealtimeModel.with_nova_sonic_2(**llm_kwargs),
     )
 
     @session.on("conversation_item_added")

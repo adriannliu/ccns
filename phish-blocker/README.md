@@ -1,6 +1,6 @@
 # Phish-Blocker
 
-AI call screener built on LiveKit Agents + Twilio SIP + OpenAI Realtime.
+AI call screener built on LiveKit Agents + Twilio SIP + Amazon Nova Sonic (Bedrock).
 An inbound call is screened by a conversational agent that detects scam signals,
 interrogates suspicious callers, and renders a live verdict on a dashboard.
 
@@ -24,7 +24,7 @@ phish-blocker/
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
-cp .env.example .env   # fill in LiveKit + OpenAI keys
+cp .env.example .env   # fill in LiveKit + AWS keys (enable Nova 2 Sonic in Bedrock)
 ```
 
 ## Run (two terminals)

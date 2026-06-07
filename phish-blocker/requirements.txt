@@ -1,3 +1,4 @@
-livekit-agents[openai,silero]~=1.0
+livekit-agents[aws,silero]~=1.5
+livekit-plugins-aws[realtime]~=1.5
 aiohttp
 python-dotenv
