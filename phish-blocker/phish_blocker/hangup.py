@@ -1,3 +1,5 @@
+import asyncio
+import inspect
 import logging
 
 from livekit.agents import JobContext
@@ -44,10 +46,10 @@ async def maybe_hangup_call(
     if state.hangup_started:
         return
 
-    # Give the caller a few chances to justify themselves before any score-driven
-    # hang-up. This guard takes precedence even over a forced (confirmed-tactic or
-    # confident-signal) trigger, so detection alone never ends the call too early.
-    if getattr(state, "caller_turns", 0) < min_caller_turns():
+    # Give the caller a few chances to justify themselves before a score-driven
+    # hang-up. A forced trigger (confirmed scam tactic or confident signal) is a
+    # definitive detection and ends the call immediately, bypassing this guard.
+    if not force and getattr(state, "caller_turns", 0) < min_caller_turns():
         logger.info(
             "hang-up deferred (%s): caller_turns=%d < min=%d",
             trigger,
@@ -94,14 +96,7 @@ async def maybe_hangup_call(
     await _record_blocklist(state)
     await send_summary(trigger)
 
-    try:
-        handle = session.generate_reply(
-            instructions=_GOODBYE,
-            allow_interruptions=False,
-        )
-        await handle
-    except Exception as e:
-        logger.warning("goodbye speech failed: %s", e)
+    await _speak_goodbye(session)
 
     try:
         session.shutdown()
@@ -113,3 +108,34 @@ async def maybe_hangup_call(
             await job_ctx.delete_room()
         except Exception as e:
             logger.warning("delete_room failed: %s", e)
+
+
+async def _speak_goodbye(session) -> None:
+    """Deliver the goodbye and wait for it to fully play out before teardown.
+
+    The realtime model may already be answering the caller's last turn, so we
+    interrupt that first, then speak the goodbye and drain so the audio is not
+    cut off when the room is deleted.
+    """
+    try:
+        res = session.interrupt()
+        if inspect.isawaitable(res):
+            await res
+    except Exception as e:
+        logger.debug("interrupt before goodbye: %s", e)
+
+    try:
+        handle = session.generate_reply(
+            instructions=_GOODBYE,
+            allow_interruptions=False,
+        )
+        await handle
+    except Exception as e:
+        logger.warning("goodbye speech failed: %s", e)
+        return
+
+    # Let the final audio frames flush out to the caller before we hang up.
+    try:
+        await asyncio.wait_for(session.drain(), timeout=15)
+    except Exception as e:
+        logger.debug("drain after goodbye: %s", e)

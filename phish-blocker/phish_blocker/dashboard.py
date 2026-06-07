@@ -54,6 +54,9 @@ async def _ingest(request: web.Request):
 
 
 async def _history(request: web.Request):
+    # The agent runs in a separate process and writes blocklist.json directly,
+    # so reload from disk to reflect numbers it flagged during live calls.
+    blocklist.load_blocklist()
     return web.json_response({"entries": blocklist.list_history()})
 
 
