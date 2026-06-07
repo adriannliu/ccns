@@ -17,6 +17,7 @@ from livekit.plugins import aws, silero
 
 from phish_blocker import bus
 from phish_blocker.moss_tactics import init_moss, retrieve_tactics
+from phish_blocker.hangup import maybe_hangup_call
 from phish_blocker.notify import send_call_summary
 
 load_dotenv()
@@ -80,12 +81,14 @@ class CallState:
     recommendation: str = "pass"
     reason: str = ""
     alert_sent: bool = False
+    hangup_started: bool = False
 
 
 class ScreeningAgent(Agent):
-    def __init__(self) -> None:
+    def __init__(self, job_ctx: JobContext | None = None) -> None:
         super().__init__(instructions=SCREENING_INSTRUCTIONS)
         self.state = CallState()
+        self._job_ctx = job_ctx
 
     async def on_enter(self):
         self.session.generate_reply()
@@ -103,22 +106,31 @@ class ScreeningAgent(Agent):
         if sent:
             self.state.alert_sent = True
 
+    async def maybe_hangup(self, trigger: str):
+        await maybe_hangup_call(
+            session=self.session,
+            job_ctx=self._job_ctx,
+            state=self.state,
+            trigger=trigger,
+            send_summary=self.maybe_send_summary,
+        )
+
     async def screen_caller_text(self, text: str):
         prior = self.state.scam_score
         result = await retrieve_tactics(text, prior=prior)
         self.state.scam_score = result.scam_score
 
         top = result.top_match
-        if top is None:
-            return
+        if top is not None:
+            event = result.to_signal_event()
+            if event is not None and top.tactic_id not in self.state.seen_tactics:
+                self.state.seen_tactics.add(top.tactic_id)
+                self.state.signals.append(
+                    {"label": top.label, "confidence": top.confidence}
+                )
+                await bus.push(event)
 
-        event = result.to_signal_event()
-        if event is not None and top.tactic_id not in self.state.seen_tactics:
-            self.state.seen_tactics.add(top.tactic_id)
-            self.state.signals.append({"label": top.label, "confidence": top.confidence})
-            await bus.push(event)
-
-        await self.maybe_send_summary("threshold")
+        await self.maybe_hangup("threshold")
 
     @function_tool
     async def flag_scam_signal(
@@ -144,7 +156,7 @@ class ScreeningAgent(Agent):
                 "scam_score": self.state.scam_score,
             }
         )
-        await self.maybe_send_summary("threshold")
+        await self.maybe_hangup("threshold")
         return "Recorded."
 
     @function_tool
@@ -173,7 +185,10 @@ class ScreeningAgent(Agent):
             }
         )
 
-        await self.maybe_send_summary("threshold")
+        if recommendation == "block":
+            await self.maybe_hangup("threshold")
+        else:
+            await self.maybe_send_summary("threshold")
         return "Verdict set."
 
 
@@ -182,7 +197,7 @@ server = AgentServer()
 
 @server.rtc_session(agent_name="agent-py")
 async def entrypoint(ctx: JobContext):
-    agent = ScreeningAgent()
+    agent = ScreeningAgent(job_ctx=ctx)
 
     await init_moss()
 

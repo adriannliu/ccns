@@ -10,13 +10,34 @@ _SMS_MAX = 1500
 _DEFAULT_THRESHOLD = 0.66
 
 
-def score_threshold() -> float:
-    raw = os.getenv("NOTIFY_SCORE_THRESHOLD", str(_DEFAULT_THRESHOLD))
+def _parse_threshold(raw: str | None, fallback: float) -> float:
+    if not raw:
+        return fallback
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        return _DEFAULT_THRESHOLD
+        return fallback
     return max(0.0, min(1.0, value))
+
+
+def score_threshold() -> float:
+    return _parse_threshold(
+        os.getenv("NOTIFY_SCORE_THRESHOLD"),
+        _DEFAULT_THRESHOLD,
+    )
+
+
+def hangup_threshold() -> float:
+    return _parse_threshold(
+        os.getenv("HANGUP_SCORE_THRESHOLD"),
+        score_threshold(),
+    )
+
+
+def should_hangup(scam_score: float, recommendation: str) -> bool:
+    if recommendation == "block":
+        return True
+    return scam_score >= hangup_threshold()
 
 
 def _configured() -> bool:
