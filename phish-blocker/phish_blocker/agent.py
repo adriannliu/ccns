@@ -16,33 +16,55 @@ from livekit.agents import (
 from livekit.plugins import aws, silero
 
 from phish_blocker import bus
-from phish_blocker.moss_tactics import init_moss, retrieve_tactics
+from phish_blocker.moss_tactics import TacticMatch, init_moss, retrieve_tactics
 
 load_dotenv()
 logger = logging.getLogger("phish-blocker")
 
 SCREENING_INSTRUCTIONS = """
 You are an AI call screener answering on behalf of the user. You are NOT the user.
-Your job: find out who is calling and what they want, then decide whether the call
-is safe to pass through or whether it is a likely scam.
+Find out who is calling and why, then decide pass, challenge, or block.
 
-Behavior:
-- Open politely: greet, say you are screening calls for the user, ask who is calling
-  and what it is regarding. Keep turns short and natural, like a real assistant.
-- Listen for scam signals: urgency or time pressure, authority impersonation (IRS,
-  bank, police, a relative in trouble), demands for payment via gift cards, wire,
-  crypto, or one-time codes, requests for passwords or account numbers, and refusal
-  to identify themselves or verify who they are.
-- Whenever you notice such a signal, call flag_scam_signal with a short label and your
-  confidence. Call it every time a new signal appears.
-- If the caller seems suspicious, INTERROGATE: ask a specific verification question a
-  legitimate caller could answer instantly but a scammer cannot (for example, the last
-  four digits of the account they claim to be calling about, or a detail only the real
-  party would know). Note in your reasoning whether they answer or deflect.
-- Once you are confident, call set_recommendation with "pass", "challenge", or "block"
-  and a one-sentence reason.
-- Never reveal personal information about the user. Never confirm details the caller
-  is trying to fish for. If they push for sensitive info, that itself is a strong signal.
+Every call is different. Respond to what this caller is actually saying — never follow a
+fixed script, never reuse the same wording turn after turn, and never read example phrases
+below verbatim. One short, natural follow-up at a time.
+
+Opener: greet briefly, say you screen calls for the user, ask who is calling and why.
+Keep it to one short turn.
+
+Legitimate callers: routine plans, deliveries, or low-stakes check-ins with no urgency or
+payment — one clarifying question if needed, then set_recommendation "pass" with a plain
+reason tied to what they said.
+
+Suspicious callers: focus on their specific claim. [Detection system: ...] hints mean a
+known scam tactic matched their words — use that as evidence, then probe the claim itself
+in your own words.
+
+Verification principle: ask for something only the real party they claim to be would know.
+Adapt your question to their story; examples of the KIND of detail to seek (not lines to recite):
+- Bank / fraud department — account or case detail they should already have on file
+- IRS / government / police — reference number from official correspondence they cite
+- Relative in trouble — identifying detail about the person and situation they describe
+- Utility shutoff — account or bill detail they claim to be calling about
+- Tech support — ticket or case reference from their company
+- Prize / lottery — entry or confirmation detail for the prize they mention
+
+Deflection is a scam signal. If they dodge, hide behind policy, or change subject instead of
+answering, call flag_scam_signal("refused verification", 0.85) and move toward block.
+
+Also call flag_scam_signal for behavioral signals detection may miss: extreme urgency, gift
+card or wire payment, OTP/code requests, secrecy ("don't tell the bank"). Do not re-flag a
+tactic the dashboard already showed from [Detection system: ...] hints.
+
+Verdicts:
+- pass: benign purpose, no scam signals, caller cooperates
+- challenge: suspicious but still gathering facts or waiting on verification
+- block: payment demand, authority impersonation plus deflection, or multiple strong signals
+
+set_recommendation reason must be one judge-readable sentence about what they SAID or DID,
+not jargon. Good: "Demanded gift cards for IRS debt and refused case number." Bad: "high confidence scam".
+
+Never reveal the user's personal information. Never confirm details the caller is fishing for.
 """
 
 
@@ -51,6 +73,7 @@ class CallState:
     scam_score: float = 0.0
     signals: list[dict] = field(default_factory=list)
     seen_tactics: set = field(default_factory=set)
+    hinted_tactics: set = field(default_factory=set)
     recommendation: str = "pass"
     reason: str = ""
 
@@ -63,20 +86,35 @@ class ScreeningAgent(Agent):
     async def on_enter(self):
         self.session.generate_reply()
 
+    async def _inject_tactic_hint(self, match: TacticMatch):
+        hint = (
+            f"[Detection system: caller matched known scam tactic '{match.label}' "
+            f"({match.category}). {match.explanation} "
+            f"Interrogate on their specific claim before escalating.]"
+        )
+        ctx = self.chat_ctx.copy()
+        ctx.add_message(role="developer", content=hint)
+        await self.update_chat_ctx(ctx)
+
     async def screen_caller_text(self, text: str):
         result = await retrieve_tactics(text, prior=self.state.scam_score)
         self.state.scam_score = result.scam_score
 
-        event = result.to_signal_event()
-        if event is None:
+        top = result.top_match
+        if top is None:
             return
 
-        top = result.top_match
-        if top.tactic_id in self.state.seen_tactics:
-            return
-        self.state.seen_tactics.add(top.tactic_id)
-        self.state.signals.append({"label": top.label, "confidence": top.confidence})
-        await bus.push(event)
+        event = result.to_signal_event()
+        if event is not None and top.tactic_id not in self.state.seen_tactics:
+            self.state.seen_tactics.add(top.tactic_id)
+            self.state.signals.append({"label": top.label, "confidence": top.confidence})
+            await bus.push(event)
+
+        if top.tactic_id not in self.state.hinted_tactics and (
+            top.matched_red_flags or top.retrieval_score >= 0.45
+        ):
+            self.state.hinted_tactics.add(top.tactic_id)
+            await self._inject_tactic_hint(top)
 
     @function_tool
     async def flag_scam_signal(
@@ -88,7 +126,7 @@ class ScreeningAgent(Agent):
         """Record a detected scam signal and update the running score.
 
         Args:
-            label: Short name for the signal, e.g. "gift card payment demand".
+            label: Short name for the signal, e.g. "refused verification".
             confidence: How confident you are this is a scam signal, 0.0 to 1.0.
         """
         confidence = max(0.0, min(1.0, confidence))

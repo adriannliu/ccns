@@ -40,7 +40,11 @@
   .chip {
     font-size: 12px; padding: 5px 9px; border-radius: 999px;
     background: #2a1c1c; color: var(--red); border: 1px solid #44282822;
-    animation: pop .25s ease;
+    animation: pop .25s ease; cursor: default; max-width: 100%;
+  }
+  .chip .chip-detail {
+    display: block; font-size: 10px; color: #c9a0a0; margin-top: 2px;
+    font-weight: 400; line-height: 1.3;
   }
   @keyframes pop { from { transform: scale(.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
   .verdict { margin-top: 18px; padding: 14px; border-radius: 10px; text-align: center; font-weight: 700; font-size: 20px; letter-spacing: .04em; background: #1d2433; color: var(--muted); }
@@ -93,10 +97,18 @@
     $("transcript").scrollTop = $("transcript").scrollHeight;
   }
 
-  function addChip(label, conf) {
+  function addChip(label, conf, explanation) {
     const c = document.createElement("div");
     c.className = "chip";
-    c.textContent = `${label} ${Math.round(conf * 100)}%`;
+    const head = document.createElement("span");
+    head.textContent = `${label} ${Math.round(conf * 100)}%`;
+    c.appendChild(head);
+    if (explanation) {
+      const detail = document.createElement("span");
+      detail.className = "chip-detail";
+      detail.textContent = explanation.length > 120 ? explanation.slice(0, 117) + "…" : explanation;
+      c.appendChild(detail);
+    }
     $("chips").appendChild(c);
   }
 
@@ -122,7 +134,7 @@
       } else if (e.type === "transcript") {
         addTurn(e.role, e.text);
       } else if (e.type === "signal") {
-        addChip(e.label, e.confidence);
+        addChip(e.label, e.confidence, e.explanation);
         if (typeof e.scam_score === "number") setScore(e.scam_score);
       } else if (e.type === "verdict") {
         if (typeof e.scam_score === "number") setScore(e.scam_score);

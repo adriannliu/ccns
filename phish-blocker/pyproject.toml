@@ -9,6 +9,7 @@ dependencies = [
     "livekit-plugins-aws[realtime]~=1.5",
     "aiohttp",
     "python-dotenv",
+    "moss",
 ]
 
 [build-system]
