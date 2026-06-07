@@ -371,7 +371,14 @@ async def _speak_goodbye_and_hangup(ctx: JobContext, line: str) -> None:
     session = _build_session()
     try:
         await session.start(agent=Agent(instructions=_FAREWELL_PERSONA), room=ctx.room)
-        handle = session.generate_reply(instructions=line, allow_interruptions=False)
+        # Mute the caller so their audio cannot trigger a turn-detection
+        # interruption — Nova Sonic ignores allow_interruptions=False, so this is
+        # the only reliable way to play the full goodbye before teardown.
+        try:
+            session.input.set_audio_enabled(False)
+        except Exception as e:
+            logger.debug("disable caller audio before repeat goodbye: %s", e)
+        handle = session.generate_reply(instructions=line)
         # Wait for the goodbye to finish playing before tearing down the room.
         waiter = getattr(handle, "wait_for_playout", None)
         if waiter is not None:

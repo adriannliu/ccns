@@ -114,12 +114,20 @@ async def maybe_hangup_call(
 async def _speak_goodbye(session) -> None:
     """Deliver the goodbye and wait for it to FULLY play out before teardown.
 
-    The realtime model may already be answering the caller's last turn, so we
-    interrupt that first so the goodbye is spoken first. Crucially we wait on
-    SpeechHandle.wait_for_playout() (not just `await handle`), otherwise the room
-    is deleted while the goodbye audio is still being streamed and the caller
-    never hears it.
+    Nova Sonic does its own server-side turn detection, so `allow_interruptions=
+    False` is silently ignored (LiveKit logs a warning and resets it). That means
+    the caller talking over the goodbye triggers an interruption, `_done_fut`
+    resolves immediately, `wait_for_playout()` returns early, and we tear the room
+    down before the message is heard. To guarantee the message plays in full we
+    MUTE the caller's audio input first, so no incoming audio can trigger a
+    turn-detection interruption, then we generate and wait on the full playout.
     """
+    # Mute the caller so their continued audio cannot interrupt the goodbye.
+    try:
+        session.input.set_audio_enabled(False)
+    except Exception as e:
+        logger.debug("disable caller audio before goodbye: %s", e)
+
     # Stop any reply the realtime model is already generating to the caller.
     try:
         res = session.interrupt()
@@ -129,10 +137,7 @@ async def _speak_goodbye(session) -> None:
         logger.debug("interrupt before goodbye: %s", e)
 
     try:
-        handle = session.generate_reply(
-            instructions=_GOODBYE,
-            allow_interruptions=False,
-        )
+        handle = session.generate_reply(instructions=_GOODBYE)
     except Exception as e:
         logger.warning("goodbye generate_reply failed: %s", e)
         return
