@@ -11,9 +11,11 @@ Copy this doc (or point agents at `AGENTS.md` + this file) before coding. B2C ha
 | Area | Status |
 |---|---|
 | Live screening + Moss tactic retrieval | Shipped |
-| Dashboard (Live + History tabs) | Shipped |
+| Dashboard (Overview, Live, History, Contacts tabs) | Shipped |
+| Scam end-detection UX (`call_ending` / `call_end`, danger toast) | Shipped |
 | Contact allowlist fast-path (PASS + transfer) | Shipped |
 | Scam blocklist + History management | Shipped |
+| Contacts tab + REST CRUD | Shipped |
 | SIP cold transfer on PASS | Shipped — verify on your trunk |
 | Auto-hangup on sustained high score | Shipped |
 | Console call summaries | Shipped (no Twilio SMS) |
@@ -57,6 +59,7 @@ Inbound PSTN call
   3. else ScreeningAgent        → converse, Moss + LLM tools
        → block/challenge        → write blocklist.json + History tab
        → sustained high score   → auto BLOCK + hangup + blocklist write
+       → BLOCK                  → scam_handling.begin() → goodbye → delete_room
        → pass                   → handoff speech + cold transfer
 ```
 
@@ -77,13 +80,14 @@ ccns/
     │   ├── contacts.py          # allowlist load/lookup/add
     │   ├── blocklist.py         # flagged numbers record/lookup/remove/reject
     │   ├── hangup.py            # auto-block, record blocklist, goodbye, delete_room
+    │   ├── scam_handling.py     # call_ending bus event; extend for alerts/IVR
     │   ├── moss_tactics.py      # Moss retrieval + scam score
     │   ├── corpus.py            # scam_tactics.jsonl loader
     │   ├── notify.py            # console summaries + hangup thresholds
     │   ├── dashboard.py         # aiohttp server + REST + WebSocket
     │   ├── bus.py               # agent → POST /ingest
     │   └── ssl_certs.py         # cert bundle for Moss HTTPS
-    ├── static/index.html        # dashboard UI (Live | History tabs)
+    ├── static/index.html        # dashboard UI (Overview | Live | History | Contacts)
     ├── data/
     │   ├── contacts.json        # known safe callers
     │   ├── blocklist.json       # flagged/blocked callers + reasons
@@ -124,7 +128,14 @@ ccns/
 
 ### `hangup.py`
 - Triggers on explicit `block` OR score ≥ `HANGUP_SCORE_THRESHOLD` (0.66) for `HANGUP_EXCHANGES_REQUIRED` (2) elevated turns
+- Calls `scam_handling.begin()` → dashboard `call_ending` event
 - Records blocklist, speaks goodbye, shuts down session, `delete_room()`
+- `call_end` emitted from `agent.py` shutdown callback (not hangup directly)
+
+### `scam_handling.py`
+- `begin()` — logs + pushes `call_ending` when BLOCK handling starts
+- Extension point for teammate work: SMS, webhooks, post-block IVR
+- `call_end` owned by `agent.py` (fast-path exits + session shutdown)
 
 ### `moss_tactics.py`
 - Semantic relevance ramp: `MOSS_SEM_THRESHOLD` (default 0.45) → `MOSS_SEM_FULL_RELEVANCE` (default 0.75)
@@ -139,29 +150,39 @@ ccns/
 ## Dashboard
 
 ### Tabs
-- **Live Screening** — transcript, threat gauge, tactic chips, verdict, transfer status
+- **Overview** — screener status, contact/blocklist counts, call-flow summary, recent threats + contacts preview
+- **Live Screening** — transcript, threat gauge, tactic chips, verdict, transfer status, danger toast on BLOCK
 - **History** — full-page card grid from `blocklist.json`
   - **Mark as Safe** — remove from blocklist; optional checkbox to add name to `contacts.json`
   - **Remove Only** — delete from blocklist without allowlisting
   - Live sync via `history_entry` / `history_removed` WebSocket events
+- **Contacts** — allowlist CRUD; numbers here fast-path to PASS + transfer
 
 ### REST API
 | Method | Path | Purpose |
 |---|---|---|
+| GET | `/api/overview` | Counts + recent flagged + contacts preview |
 | GET | `/api/history` | List all blocklist entries |
 | DELETE | `/api/history` | Body: `{"phone": "+1..."}` — remove from blocklist |
 | POST | `/api/history/verify` | Body: `{"phone", "add_to_contacts?", "name?"}` — mark safe, optional allowlist |
+| GET | `/api/contacts` | List all allowlisted contacts |
+| POST | `/api/contacts` | Body: `{"name", "phone", "relationship?"}` — add contact |
+| DELETE | `/api/contacts` | Body: `{"phone": "+1..."}` — remove contact |
 
 ### WebSocket events (`/ws`, also via POST `/ingest`)
 | Event | Notes |
 |---|---|
 | `call_start` | `caller_id`, `contact`, `blocklist_hit` |
+| `call_ending` | BLOCK handling started — dashboard shows "Scam detected — ending call" |
+| `call_end` | Call over — dashboard resets to standby |
 | `transcript` | `role`, `text` |
 | `signal` | Moss/LLM hit + `scam_score` |
 | `verdict` | `recommendation`, `reason`, `scam_score` |
 | `transfer` | `status`: initiated \| connected \| failed |
 | `history_entry` | new/updated blocklist row |
 | `history_removed` | phone removed from blocklist |
+| `contact_added` | new/updated allowlist entry |
+| `contact_removed` | phone removed from allowlist |
 
 ---
 
@@ -215,7 +236,7 @@ python scripts/demo_dashboard.py
 
 | | |
 |---|---|
-| **Tested** | Dashboard pipeline, Moss retrieval, History tab, blocklist record/remove API |
+| **Tested** | Dashboard pipeline, Moss retrieval, all four dashboard tabs, REST APIs |
 | **Tested** | Real Twilio inbound screening (per team) |
 | **Assumed — verify live** | SIP REFER transfer to `RESIDENT_PHONE` |
 | **Assumed — verify live** | `sip.phoneNumber` present on inbound SIP (required for blocklist) |
@@ -253,8 +274,9 @@ python scripts/demo_dashboard.py
 2. `phish_blocker/agent.py` — all call logic
 3. `phish_blocker/blocklist.py` + `contacts.py` — fast-path symmetry
 4. `phish_blocker/transfer.py` — telephony risk area
-5. `static/index.html` — dashboard tabs + History UX
-6. `phish_blocker/dashboard.py` — REST endpoints
+5. `static/index.html` — dashboard tabs (Overview, Live, History, Contacts)
+6. `phish_blocker/dashboard.py` — REST + WebSocket
+7. `phish_blocker/scam_handling.py` — BLOCK lifecycle hook
 
 ---
 

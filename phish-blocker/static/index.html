@@ -73,6 +73,7 @@
   .tab.active { background: var(--panel2); color: var(--green); box-shadow: 0 0 12px rgba(46,230,160,.15); }
   .tab[data-tab="history"].active { color: var(--red); box-shadow: 0 0 12px rgba(255,77,94,.12); }
   .tab[data-tab="contacts"].active { color: var(--green); box-shadow: 0 0 12px rgba(46,230,160,.18); }
+  .tab[data-tab="overview"].active { color: var(--amber); box-shadow: 0 0 12px rgba(241,196,15,.15); }
 
   .header-status {
     margin-left: auto; display: flex; align-items: center; gap: 9px;
@@ -100,6 +101,11 @@
     gap: 16px; padding: 16px;
   }
 
+  #overviewView {
+    grid-template-rows: auto 1fr;
+    gap: 0; padding: 16px;
+    overflow-y: auto;
+  }
   #historyView,
   #contactsView {
     grid-template-rows: auto 1fr;
@@ -298,6 +304,52 @@
   }
   .contact-form input:focus { outline: none; border-color: var(--green); }
 
+  /* overview tab */
+  .overview-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 16px;
+  }
+  .stat-card {
+    border: 1px solid var(--border2); border-radius: 12px; padding: 18px;
+    background: linear-gradient(160deg, rgba(255,255,255,.03), transparent 60%), var(--panel2);
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .stat-card .stat-label {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted);
+  }
+  .stat-card .stat-value { font-size: 32px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; }
+  .stat-card.safe .stat-value { color: var(--green); }
+  .stat-card.danger .stat-value { color: var(--red); }
+  .stat-card.status .stat-value { font-size: 14px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text); }
+  .overview-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; min-height: 0; }
+  .flow-steps { display: flex; flex-direction: column; gap: 10px; }
+  .flow-step {
+    display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px;
+    border: 1px solid var(--border2); border-radius: 10px; background: #0c111a;
+  }
+  .flow-num {
+    font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--amber);
+    width: 24px; height: 24px; border-radius: 6px; border: 1px solid rgba(241,196,15,.35);
+    display: grid; place-items: center; flex-shrink: 0;
+  }
+  .flow-text { font-size: 13px; line-height: 1.45; color: #c7cedd; }
+  .flow-text strong { color: var(--text); display: block; margin-bottom: 2px; font-size: 13.5px; }
+  .overview-list { display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; }
+  .overview-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 12px; border: 1px solid var(--border2); border-radius: 9px; background: #0c111a;
+  }
+  .overview-row-main { min-width: 0; }
+  .overview-row-title { font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .overview-row-sub { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .overview-badge {
+    font-family: var(--mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+    padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border2); flex-shrink: 0;
+  }
+  .overview-badge.block { color: var(--red); border-color: rgba(255,77,94,.4); }
+  .overview-badge.safe { color: var(--green); border-color: rgba(46,230,160,.4); }
+  .overview-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .panel-title.amber::before { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+
   .toast {
     position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(80px);
     z-index: 100; padding: 12px 20px; border-radius: 10px;
@@ -331,6 +383,7 @@
       </div>
     </div>
     <nav class="tabs">
+      <button type="button" class="tab" data-tab="overview">Overview</button>
       <button type="button" class="tab active" data-tab="live">Live Screening</button>
       <button type="button" class="tab" data-tab="history">History</button>
       <button type="button" class="tab" data-tab="contacts">Contacts</button>
@@ -339,6 +392,50 @@
       <span class="dot" id="dot"></span><span id="status">Standby — waiting for call</span>
     </div>
   </header>
+
+  <main id="overviewView" class="view">
+    <div class="history-header">
+      <h2>Screening at a Glance</h2>
+    </div>
+    <div class="overview-grid">
+      <div class="stat-card status">
+        <div class="stat-label">Screener Status</div>
+        <div class="stat-value" id="overviewStatus">Standby</div>
+      </div>
+      <div class="stat-card safe">
+        <div class="stat-label">Trusted Contacts</div>
+        <div class="stat-value" id="overviewContacts">0</div>
+      </div>
+      <div class="stat-card danger">
+        <div class="stat-label">Flagged Numbers</div>
+        <div class="stat-value" id="overviewFlagged">0</div>
+      </div>
+    </div>
+    <div class="overview-columns">
+      <div class="panel">
+        <div class="panel-title amber">How Calls Are Handled</div>
+        <div class="flow-steps">
+          <div class="flow-step"><span class="flow-num">1</span><div class="flow-text"><strong>Known contact</strong>Caller ID in allowlist → instant PASS + cold transfer to resident.</div></div>
+          <div class="flow-step"><span class="flow-num">2</span><div class="flow-text"><strong>Repeat scammer</strong>Number in blocklist → instant BLOCK, no screening.</div></div>
+          <div class="flow-step"><span class="flow-num">3</span><div class="flow-text"><strong>Unknown caller</strong>Agent screens conversation; Moss + LLM detect scam tactics.</div></div>
+          <div class="flow-step"><span class="flow-num">4</span><div class="flow-text"><strong>Verdict</strong>PASS transfers · CHALLENGE flags · BLOCK ends call + saves to History.</div></div>
+        </div>
+        <div class="overview-actions">
+          <button type="button" class="btn safe" data-goto="live">Open Live Screening</button>
+          <button type="button" class="btn" data-goto="history">View History</button>
+          <button type="button" class="btn" data-goto="contacts">Manage Contacts</button>
+        </div>
+      </div>
+      <div class="panel" style="min-height:0;">
+        <div class="panel-title red">Recent Threats</div>
+        <div class="overview-list" id="overviewThreats"><div class="empty">No flagged numbers yet.</div></div>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:16px;">
+      <div class="panel-title">Trusted Contacts Preview</div>
+      <div class="overview-list" id="overviewContactsList"><div class="empty">No contacts yet.</div></div>
+    </div>
+  </main>
 
   <main id="liveView" class="view active">
     <div class="panel">
@@ -434,9 +531,11 @@
     document.querySelectorAll(".tab").forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.tab === name);
     });
+    $("overviewView").classList.toggle("active", name === "overview");
     $("liveView").classList.toggle("active", name === "live");
     $("historyView").classList.toggle("active", name === "history");
     $("contactsView").classList.toggle("active", name === "contacts");
+    if (name === "overview") loadOverview();
     if (name === "history") loadHistory();
     if (name === "contacts") loadContacts();
   }
@@ -444,6 +543,71 @@
   document.querySelectorAll(".tab").forEach((btn) => {
     btn.addEventListener("click", () => switchTab(btn.dataset.tab));
   });
+
+  document.querySelectorAll("[data-goto]").forEach((btn) => {
+    btn.addEventListener("click", () => switchTab(btn.dataset.goto));
+  });
+
+  function syncOverviewStatus() {
+    const el = $("overviewStatus");
+    if (!el) return;
+    const status = $("status").textContent || "Standby";
+    el.textContent = status.replace(" — ", " · ");
+  }
+
+  function renderOverviewThreats(entries) {
+    const box = $("overviewThreats");
+    if (!entries.length) {
+      box.innerHTML = '<div class="empty">No flagged numbers yet.</div>';
+      return;
+    }
+    box.innerHTML = "";
+    for (const entry of entries) {
+      const row = document.createElement("div");
+      row.className = "overview-row";
+      const pct = Math.round((entry.scam_score || 0) * 100);
+      row.innerHTML =
+        `<div class="overview-row-main">` +
+          `<div class="overview-row-title">${formatPhone(entry.phone)}</div>` +
+          `<div class="overview-row-sub">${entry.reason || "Flagged"} · ${formatWhen(entry.last_flagged_at)} · ${pct}%</div>` +
+        `</div>` +
+        `<span class="overview-badge block">${entry.recommendation || "block"}</span>`;
+      box.appendChild(row);
+    }
+  }
+
+  function renderOverviewContactsPreview(list) {
+    const box = $("overviewContactsList");
+    if (!list.length) {
+      box.innerHTML = '<div class="empty">No contacts yet.</div>';
+      return;
+    }
+    box.innerHTML = "";
+    for (const contact of list) {
+      const row = document.createElement("div");
+      row.className = "overview-row";
+      row.innerHTML =
+        `<div class="overview-row-main">` +
+          `<div class="overview-row-title">${contact.name}</div>` +
+          `<div class="overview-row-sub">${formatPhone(contact.phone)}${contact.relationship ? " · " + contact.relationship : ""}</div>` +
+        `</div>` +
+        `<span class="overview-badge safe">allowlist</span>`;
+      box.appendChild(row);
+    }
+  }
+
+  async function loadOverview() {
+    syncOverviewStatus();
+    try {
+      const res = await fetch("/api/overview");
+      if (!res.ok) return;
+      const data = await res.json();
+      $("overviewContacts").textContent = data.contacts_count ?? 0;
+      $("overviewFlagged").textContent = data.blocklist_count ?? 0;
+      renderOverviewThreats(data.recent_flagged || []);
+      renderOverviewContactsPreview(data.contacts || []);
+    } catch (_) {}
+  }
 
   function levelFor(s) {
     if (s >= 0.75) return { name: "CRITICAL", label: "Critical Risk", color: "var(--red)" };
@@ -516,6 +680,11 @@
   function setScamEndingStatus() {
     $("dot").className = "dot ending";
     $("status").textContent = "Scam detected — ending call";
+    syncOverviewStatus();
+  }
+
+  function maybeRefreshOverview() {
+    if (activeTab === "overview") loadOverview();
   }
 
   function formatPhone(phone) {
@@ -580,6 +749,7 @@
     const box = $("historyList");
     box.innerHTML = "";
     $("historyCount").textContent = `${entries.length} entr${entries.length === 1 ? "y" : "ies"}`;
+    if ($("overviewFlagged")) $("overviewFlagged").textContent = entries.length;
     if (!entries.length) {
       box.innerHTML = '<div class="empty">No flagged numbers yet.</div>';
       return;
@@ -658,6 +828,7 @@
     const box = $("contactsList");
     box.innerHTML = "";
     $("contactsCount").textContent = `${list.length} contact${list.length === 1 ? "" : "s"}`;
+    if ($("overviewContacts")) $("overviewContacts").textContent = list.length;
     if (!list.length) {
       box.innerHTML = '<div class="empty">No contacts yet.</div>';
       return;
@@ -789,6 +960,7 @@
         $("toast").className = "toast";
         $("dot").className = "dot live";
         $("status").textContent = e.blocklist_hit ? "Blocked repeat caller" : "Call in progress";
+        syncOverviewStatus();
         $("transcript").innerHTML = "";
         $("chips").innerHTML = '<div class="empty">No tactics matched yet.</div>';
         setScore(0);
@@ -801,17 +973,23 @@
         }
       } else if (e.type === "call_ending") {
         setScamEndingStatus();
+        syncOverviewStatus();
       } else if (e.type === "call_end") {
         $("dot").className = "dot ended";
         $("status").textContent = "Call ended — standby";
+        syncOverviewStatus();
       } else if (e.type === "history_entry") {
         upsertHistoryEntry(e.entry);
+        maybeRefreshOverview();
       } else if (e.type === "history_removed") {
         removeHistoryEntry(e.phone);
+        maybeRefreshOverview();
       } else if (e.type === "contact_added") {
         upsertContact(e.contact);
+        maybeRefreshOverview();
       } else if (e.type === "contact_removed") {
         removeContactEntry(e.phone);
+        maybeRefreshOverview();
       } else if (e.type === "transcript") {
         addTurn(e.role, e.text);
       } else if (e.type === "signal") {
@@ -846,6 +1024,7 @@
 
   loadHistory();
   loadContacts();
+  loadOverview();
   connect();
 </script>
 </body>

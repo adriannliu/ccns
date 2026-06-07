@@ -19,13 +19,14 @@ ccns/
 │   │   ├── contacts.py        # Local JSON contacts allowlist
 │   │   ├── blocklist.py       # Flagged scammer numbers + repeat-caller reject
 │   │   ├── hangup.py          # Auto-block + goodbye + room teardown
+│   │   ├── scam_handling.py   # call_ending hook after BLOCK (extend for alerts/IVR)
 │   │   ├── moss_tactics.py    # Moss retrieval + scam score
 │   │   ├── corpus.py          # Scam tactic corpus loader
 │   │   ├── notify.py          # Console call summaries + hangup thresholds
-│   │   ├── dashboard.py       # aiohttp: /ws, /ingest, /api/history (GET/DELETE/verify)
+│   │   ├── dashboard.py       # aiohttp: /ws, /ingest, REST (overview/history/contacts)
 │   │   ├── bus.py             # agent → dashboard HTTP bridge
 │   │   └── ssl_certs.py       # cert bundle for Moss HTTPS
-│   ├── static/index.html      # dashboard UI (Live | History tabs)
+│   ├── static/index.html      # dashboard UI (Overview | Live | History | Contacts)
 │   ├── data/
 │   │   ├── contacts.json      # known callers (E.164)
 │   │   ├── blocklist.json     # flagged/blocked numbers + reasons
@@ -65,6 +66,7 @@ Caller → Twilio (TwiML Bin → SIP) → LiveKit trunk + dispatch → room
       → tools: flag_scam_signal / set_recommendation
       → block/challenge → blocklist.py record → History panel
       → sustained high score → hangup.py (auto BLOCK + record)
+      → BLOCK → scam_handling.begin() → goodbye + delete_room → call_end on dashboard
       → PASS → transfer.py (SIP REFER → RESIDENT_PHONE)
   → bus.py POSTs to dashboard /ingest → /ws → browser
 ```
@@ -110,8 +112,10 @@ If `AgentServer` / `@server.rtc_session()` errors on install, check the installe
 
 ## Open build items
 
-1. Additive scam score bumps for repeated signals/deflections (hangup partially covers persistence today).
-2. Dashboard known-contact banner on `call_start.contact`.
-3. Smarter claim-based interrogation challenges.
+1. Known-contact banner on Live tab when `call_start.contact` is set.
+2. Additive scam score bumps for repeated signals/deflections.
+3. Smarter claim-based interrogation challenges (dynamic verification per caller story).
 4. Concrete LiveKit-inbound-Twilio checklist with exact `lk` CLI commands.
-5. Blocklist polish: export CSV, bulk clear; optional Twilio SMS alerts.
+5. Blocklist polish: export CSV, bulk clear, incident detail view.
+6. Extend `scam_handling.py` (SMS alerts, post-block IVR, webhook integrations).
+7. Persist call session log (transcript + verdict) for Overview analytics beyond blocklist.

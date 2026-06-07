@@ -103,6 +103,24 @@ async def _history_verify(request: web.Request):
     return web.json_response({"ok": True, "removed": removed, "contact": contact})
 
 
+async def _overview(request: web.Request):
+    history = blocklist.list_history()
+    contact_list = contacts.list_contacts()
+    recent = sorted(
+        history,
+        key=lambda e: e.get("last_flagged_at") or "",
+        reverse=True,
+    )[:5]
+    return web.json_response(
+        {
+            "contacts_count": len(contact_list),
+            "blocklist_count": len(history),
+            "recent_flagged": recent,
+            "contacts": contact_list[:6],
+        }
+    )
+
+
 async def _contacts_list(request: web.Request):
     return web.json_response({"contacts": contacts.list_contacts()})
 
@@ -147,6 +165,7 @@ def build_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/", _index)
     app.router.add_get("/ws", _ws_handler)
+    app.router.add_get("/api/overview", _overview)
     app.router.add_get("/api/history", _history)
     app.router.add_delete("/api/history", _history_remove)
     app.router.add_post("/api/history/verify", _history_verify)

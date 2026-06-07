@@ -14,8 +14,10 @@ and renders a live verdict on a dashboard.
 - **Transfers verified callers** — PASS verdict → SIP REFER cold transfer to `RESIDENT_PHONE`
 - **Known-contact fast-path** — caller ID in `data/contacts.json` → silent PASS + immediate transfer (no agent)
 - **Scam blocklist** — flagged numbers saved to `data/blocklist.json` with reason; repeat callers auto-blocked
-- **History tab** — full-page flagged-number list; Mark as Safe, remove, or add to contacts allowlist
-- **Live dashboard** — transcript, scam score, tactic chips, verdict, transfer status
+- **Dashboard (4 tabs)** — Overview, Live Screening, History, Contacts
+- **History tab** — flagged-number list; Mark as Safe, remove, or add to contacts allowlist
+- **Contacts tab** — manage allowlist (add/remove); syncs with History verify flow
+- **Live dashboard** — transcript, scam score, tactic chips, verdict, scam-end detection UX
 
 ## Structure
 
@@ -27,14 +29,15 @@ phish-blocker/
 │   ├── contacts.py      # Local JSON contacts allowlist
 │   ├── blocklist.py     # Flagged scammer numbers + repeat-caller reject
 │   ├── hangup.py        # Auto-block + goodbye + room teardown
+│   ├── scam_handling.py # call_ending hook when BLOCK handling starts
 │   ├── moss_tactics.py  # Moss retrieval + scam score
 │   ├── corpus.py        # Scam tactic corpus loader
 │   ├── notify.py        # Console call summaries + hangup thresholds
-│   ├── dashboard.py     # aiohttp: /ws, /ingest, /api/history
+│   ├── dashboard.py     # aiohttp: /ws, /ingest, REST APIs
 │   ├── bus.py           # agent → dashboard event bridge
 │   └── ssl_certs.py     # cert bundle for Moss HTTPS
 ├── static/
-│   └── index.html       # dashboard UI (Live | History tabs)
+│   └── index.html       # dashboard UI (Overview | Live | History | Contacts)
 ├── data/
 │   ├── contacts.json    # known callers (E.164 phone → name)
 │   ├── blocklist.json   # flagged/blocked numbers + reasons
@@ -84,13 +87,19 @@ Set `TWILIO_PSTN_DOMAIN` (Elastic SIP trunk termination domain, e.g. `mytrunk.ps
 
 ## Contacts allowlist
 
-Edit `data/contacts.json`:
+Manage via the dashboard **Contacts** tab, or edit `data/contacts.json` directly:
 
 ```json
 [
   { "name": "Dave", "phone": "+14155551234", "relationship": "friend" }
 ]
 ```
+
+| API | Purpose |
+|---|---|
+| `GET /api/contacts` | List all contacts |
+| `POST /api/contacts` | Add (`{"name", "phone", "relationship?"}`) |
+| `DELETE /api/contacts` | Remove (`{"phone": "+1..."}`) |
 
 Phone numbers are normalized to E.164. Known callers bypass the agent entirely and are cold-transferred to `RESIDENT_PHONE`. Caller ID can be spoofed — this is a convenience layer, not authentication.
 
@@ -126,6 +135,17 @@ Contacts take priority: a number in both lists will PASS, not block.
 5. **Unknown legit caller:** "Dave confirming lunch Tuesday" → brief screen → PASS → transfer.
 
 **Offline UI rehearsal:** run `demo_dashboard.py` while the dashboard is open.
+
+## Dashboard tabs
+
+| Tab | Purpose |
+|---|---|
+| **Overview** | Status, counts, call-flow summary, recent threats + contacts preview |
+| **Live Screening** | Real-time transcript, scam score, tactics, verdict |
+| **History** | Flagged numbers — mark safe, remove, or allowlist |
+| **Contacts** | Trusted caller allowlist CRUD |
+
+`GET /api/overview` returns aggregate stats for the Overview tab.
 
 ## Demo-day risks
 
