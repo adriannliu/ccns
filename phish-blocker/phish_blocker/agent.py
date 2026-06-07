@@ -17,6 +17,7 @@ from livekit.plugins import aws, silero
 
 from phish_blocker import bus
 from phish_blocker.moss_tactics import init_moss, retrieve_tactics
+from phish_blocker.notify import send_screening_alert
 
 load_dotenv()
 logger = logging.getLogger("phish-blocker")
@@ -78,6 +79,7 @@ class CallState:
     seen_tactics: set = field(default_factory=set)
     recommendation: str = "pass"
     reason: str = ""
+    alert_sent: bool = False
 
 
 class ScreeningAgent(Agent):
@@ -153,6 +155,16 @@ class ScreeningAgent(Agent):
                 "scam_score": self.state.scam_score,
             }
         )
+
+        if recommendation == "block" and not self.state.alert_sent:
+            self.state.alert_sent = True
+            await send_screening_alert(
+                recommendation=recommendation,
+                reason=reason,
+                scam_score=self.state.scam_score,
+                signals=list(self.state.signals),
+            )
+
         return "Verdict set."
 
 
