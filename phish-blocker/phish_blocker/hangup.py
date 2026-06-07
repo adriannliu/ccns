@@ -23,14 +23,19 @@ async def maybe_hangup_call(
 ) -> None:
     if state.hangup_started:
         return
-    if not should_hangup(state.scam_score, state.recommendation):
+    if not should_hangup(
+        state.scam_score,
+        state.recommendation,
+        state.elevated_turns,
+    ):
         return
 
     state.hangup_started = True
     logger.info(
-        "auto hang-up triggered (%s score=%.2f)",
+        "auto hang-up triggered (%s score=%.2f elevated_turns=%d)",
         trigger,
         state.scam_score,
+        state.elevated_turns,
     )
 
     if state.recommendation != "block":

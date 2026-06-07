@@ -18,7 +18,7 @@ from livekit.plugins import aws, silero
 from phish_blocker import bus
 from phish_blocker.moss_tactics import init_moss, retrieve_tactics
 from phish_blocker.hangup import maybe_hangup_call
-from phish_blocker.notify import send_call_summary
+from phish_blocker.notify import hangup_threshold, send_call_summary
 
 load_dotenv()
 logger = logging.getLogger("phish-blocker")
@@ -82,6 +82,7 @@ class CallState:
     reason: str = ""
     alert_sent: bool = False
     hangup_started: bool = False
+    elevated_turns: int = 0
 
 
 class ScreeningAgent(Agent):
@@ -115,10 +116,17 @@ class ScreeningAgent(Agent):
             send_summary=self.maybe_send_summary,
         )
 
+    def _track_elevated_turn(self):
+        if self.state.scam_score >= hangup_threshold():
+            self.state.elevated_turns += 1
+        else:
+            self.state.elevated_turns = 0
+
     async def screen_caller_text(self, text: str):
         prior = self.state.scam_score
         result = await retrieve_tactics(text, prior=prior)
         self.state.scam_score = result.scam_score
+        self._track_elevated_turn()
 
         top = result.top_match
         if top is not None:
