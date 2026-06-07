@@ -139,6 +139,17 @@
       } else if (e.type === "verdict") {
         if (typeof e.scam_score === "number") setScore(e.scam_score);
         setVerdict(e.recommendation, e.reason);
+      } else if (e.type === "transfer") {
+        const v = $("verdict");
+        if (e.status === "initiated") {
+          v.className = "verdict pass";
+          v.innerHTML = "TRANSFERRING…" + (e.to ? `<div class="reason">→ ${e.to}</div>` : "");
+        } else if (e.status === "connected") {
+          v.className = "verdict pass";
+          v.innerHTML = "CONNECTED" + (e.to ? `<div class="reason">Caller bridged to ${e.to}</div>` : "");
+        } else if (e.status === "failed") {
+          v.innerHTML = "TRANSFER FAILED" + (e.error ? `<div class="reason">${e.error}</div>` : "");
+        }
       }
     };
     ws.onclose = () => setTimeout(connect, 1000);

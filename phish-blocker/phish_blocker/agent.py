@@ -19,6 +19,7 @@ from phish_blocker import bus
 from phish_blocker.moss_tactics import init_moss, retrieve_tactics
 from phish_blocker.hangup import maybe_hangup_call
 from phish_blocker.notify import hangup_threshold, send_call_summary
+from phish_blocker.transfer import maybe_transfer_call
 
 load_dotenv()
 logger = logging.getLogger("phish-blocker")
@@ -55,7 +56,7 @@ Also call flag_scam_signal for patterns you notice: extreme urgency, unusual pay
 methods, code or credential requests, secrecy ("don't tell the bank").
 
 Verdicts:
-- pass: benign purpose, no risk signals, caller cooperates
+- pass: benign purpose, no risk signals, caller cooperates — they will be connected to the resident
 - challenge: suspicious but still gathering facts or waiting on verification
 - block: payment pressure plus deflection, unverifiable authority claim, or multiple signals
 
@@ -83,6 +84,7 @@ class CallState:
     alert_sent: bool = False
     hangup_started: bool = False
     elevated_turns: int = 0
+    transfer_started: bool = False
 
 
 class ScreeningAgent(Agent):
@@ -121,6 +123,14 @@ class ScreeningAgent(Agent):
             self.state.elevated_turns += 1
         else:
             self.state.elevated_turns = 0
+
+    async def maybe_transfer(self, trigger: str):
+        await maybe_transfer_call(
+            session=self.session,
+            job_ctx=self._job_ctx,
+            state=self.state,
+            trigger=trigger,
+        )
 
     async def screen_caller_text(self, text: str):
         prior = self.state.scam_score
@@ -195,6 +205,8 @@ class ScreeningAgent(Agent):
 
         if recommendation == "block":
             await self.maybe_hangup("threshold")
+        elif recommendation == "pass":
+            await self.maybe_transfer("threshold")
         else:
             await self.maybe_send_summary("threshold")
         return "Verdict set."
