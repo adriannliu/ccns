@@ -39,6 +39,56 @@ def resident_phone() -> str | None:
     return f"+{digits}"
 
 
+def transfer_targets(phone: str) -> list[str]:
+    targets = [phone, f"tel:{phone}"]
+    domain = os.getenv("TWILIO_PSTN_DOMAIN", "").strip()
+    if domain:
+        targets.append(f"sip:{phone}@{domain};transport=udp")
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for target in targets:
+        if target not in seen:
+            seen.add(target)
+            ordered.append(target)
+    return ordered
+
+
+def _caller_participant(job_ctx: JobContext) -> rtc.RemoteParticipant | None:
+    for participant in job_ctx.room.remote_participants.values():
+        if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+            return participant
+    return None
+
+
+async def _cold_transfer(
+    job_ctx: JobContext,
+    participant: rtc.RemoteParticipant,
+    phone: str,
+) -> str | None:
+    errors: list[str] = []
+    for target in transfer_targets(phone):
+        try:
+            await job_ctx.transfer_sip_participant(
+                participant,
+                target,
+                play_dialtone=True,
+            )
+            logger.info(
+                "cold transfer ok for %s via %s",
+                participant.identity,
+                target,
+            )
+            return target
+        except Exception as e:
+            msg = f"{target}: {e}"
+            errors.append(msg)
+            logger.warning("cold transfer attempt failed (%s)", msg)
+
+    if errors:
+        logger.warning("all cold transfer attempts failed: %s", "; ".join(errors))
+    return None
+
+
 async def maybe_transfer_call(
     *,
     session,
@@ -61,7 +111,7 @@ async def maybe_transfer_call(
         return
 
     state.transfer_started = True
-    logger.info("pass transfer starting (%s -> %s)", trigger, phone)
+    logger.info("pass cold transfer starting (%s -> %s)", trigger, phone)
 
     await bus.push(
         {
@@ -81,30 +131,38 @@ async def maybe_transfer_call(
     except Exception as e:
         logger.warning("handoff speech failed: %s", e)
 
-    try:
-        participant = await job_ctx.wait_for_participant(
-            kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+    participant = _caller_participant(job_ctx)
+    if participant is None:
+        try:
+            participant = await job_ctx.wait_for_participant(
+                kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+            )
+        except Exception as e:
+            logger.warning("could not find SIP participant: %s", e)
+            await bus.push({"type": "transfer", "status": "failed", "error": str(e)})
+            state.transfer_started = False
+            return
+
+    target = await _cold_transfer(job_ctx, participant, phone)
+    if target is None:
+        await bus.push(
+            {
+                "type": "transfer",
+                "status": "failed",
+                "error": "SIP REFER failed for all transfer targets",
+            }
         )
-    except Exception as e:
-        logger.warning("could not find SIP participant: %s", e)
-        await bus.push({"type": "transfer", "status": "failed", "error": str(e)})
         state.transfer_started = False
         return
 
-    try:
-        await job_ctx.transfer_sip_participant(
-            participant,
-            phone,
-            play_dialtone=True,
-        )
-    except Exception as e:
-        logger.warning("SIP transfer failed: %s", e)
-        await bus.push({"type": "transfer", "status": "failed", "error": str(e)})
-        state.transfer_started = False
-        return
-
-    await bus.push({"type": "transfer", "status": "connected", "to": phone})
-    logger.info("SIP transfer initiated for %s", participant.identity)
+    await bus.push(
+        {
+            "type": "transfer",
+            "status": "connected",
+            "to": phone,
+            "via": target,
+        }
+    )
 
     try:
         session.shutdown()
@@ -125,7 +183,7 @@ async def transfer_contact_call(
     if phone is None:
         return False
 
-    logger.info("known-contact transfer starting (%s -> %s)", contact_name, phone)
+    logger.info("known-contact cold transfer (%s -> %s)", contact_name, phone)
     await bus.push(
         {
             "type": "transfer",
@@ -135,17 +193,23 @@ async def transfer_contact_call(
         }
     )
 
-    try:
-        await job_ctx.transfer_sip_participant(
-            participant,
-            phone,
-            play_dialtone=True,
+    target = await _cold_transfer(job_ctx, participant, phone)
+    if target is None:
+        await bus.push(
+            {
+                "type": "transfer",
+                "status": "failed",
+                "error": "SIP REFER failed for all transfer targets",
+            }
         )
-    except Exception as e:
-        logger.warning("contact SIP transfer failed: %s", e)
-        await bus.push({"type": "transfer", "status": "failed", "error": str(e)})
         return False
 
-    await bus.push({"type": "transfer", "status": "connected", "to": phone})
-    logger.info("contact SIP transfer initiated for %s", participant.identity)
+    await bus.push(
+        {
+            "type": "transfer",
+            "status": "connected",
+            "to": phone,
+            "via": target,
+        }
+    )
     return True
