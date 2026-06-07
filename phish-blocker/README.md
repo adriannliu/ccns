@@ -2,20 +2,43 @@
 
 AI call screener built on LiveKit Agents + Twilio SIP + Amazon Nova Sonic (Bedrock).
 An inbound call is screened by a conversational agent that detects scam signals,
-interrogates suspicious callers, and renders a live verdict on a dashboard.
+interrogates suspicious callers, cold-transfers verified callers to the resident,
+and renders a live verdict on a dashboard.
+
+## What it does
+
+- **Screens unknown callers** — conversational agent asks who is calling and why
+- **Detects scam intent** — Moss semantic retrieval + LLM `flag_scam_signal` (conversation only, no voice biometrics)
+- **Interrogates suspicious callers** — claim-specific verification questions; deflection is a strong signal
+- **Auto-hangup persistent scammers** — sustained high score across multiple turns triggers BLOCK + goodbye
+- **Transfers verified callers** — PASS verdict → SIP REFER cold transfer to `RESIDENT_PHONE`
+- **Known-contact fast-path** — caller ID in `data/contacts.json` → silent PASS + immediate transfer (no agent)
+- **Live dashboard** — transcript, scam score, tactic chips, verdict, transfer status
 
 ## Structure
 
 ```
 phish-blocker/
-├── phish_blocker/       # Python package
-│   ├── agent.py         # LiveKit screening agent
+├── phish_blocker/
+│   ├── agent.py         # ScreeningAgent, contact fast-path, tools
+│   ├── transfer.py      # SIP REFER cold transfer on PASS
+│   ├── contacts.py      # Local JSON contacts allowlist
+│   ├── hangup.py        # Auto-block + goodbye + room teardown
+│   ├── moss_tactics.py  # Moss retrieval + scam score
+│   ├── corpus.py        # Scam tactic corpus loader
+│   ├── notify.py        # Console call summaries + hangup thresholds
 │   ├── dashboard.py     # aiohttp server + WebSocket broadcast
 │   └── bus.py           # agent → dashboard event bridge
 ├── static/
 │   └── index.html       # live dashboard UI
+├── data/
+│   ├── contacts.json    # known callers (E.164 phone → name)
+│   └── scam_tactics.jsonl
+├── scripts/
+│   ├── build_moss_index.py
+│   ├── demo_dashboard.py   # replay scam script to dashboard (no agent)
+│   └── demo_scripts.md
 ├── pyproject.toml
-├── requirements.txt
 └── .env.example
 ```
 
@@ -24,37 +47,63 @@ phish-blocker/
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
-cp .env.example .env   # fill in LiveKit + AWS keys (enable Nova 2 Sonic in Bedrock)
+cp .env.example .env   # fill in LiveKit + AWS + Moss keys
 ```
+
+Enable **Nova Sonic 2** in the AWS Bedrock console before running the agent.
 
 ## Run (two terminals)
 
 1. `python -m phish_blocker.dashboard` — open http://localhost:8080
 2. `python -m phish_blocker.agent dev` — starts the LiveKit agent worker
 
-## Telephony (do this FIRST, hour one — it's the riskiest part)
+**Moss index (one-time):** `python scripts/build_moss_index.py`
+
+**Dashboard-only demo (no agent):** `python scripts/demo_dashboard.py`
+
+**Console demo (no telephony):** `python -m phish_blocker.agent console --text`
+
+## Telephony (do this FIRST — riskiest part)
 
 Follow LiveKit's "Inbound calls via Twilio" guide:
 
-- Buy a Twilio number.
+- Buy a Twilio voice number.
 - Create a TwiML Bin pointing at your LiveKit SIP URI.
-- Create a LiveKit inbound trunk + dispatch rule (LiveKit CLI: `lk sip ...`).
-- Call the number; the agent should answer.
+- Create a LiveKit inbound trunk + dispatch rule (`lk sip ...`).
+- **Trunk credentials must match the TwiML Bin** — #1 failure mode.
+- Set `RESIDENT_PHONE` in `.env` and test cold transfer on a real call.
 
-De-risk this before touching the prompt or dashboard. If the call doesn't connect, nothing else matters.
+Optional: set `TWILIO_PSTN_DOMAIN` (Elastic SIP trunk termination domain) if SIP REFER needs a `sip:` URI target.
+
+## Contacts allowlist
+
+Edit `data/contacts.json`:
+
+```json
+[
+  { "name": "Dave", "phone": "+14155551234", "relationship": "friend" }
+]
+```
+
+Phone numbers are normalized to E.164. Known callers bypass the agent entirely and are cold-transferred to `RESIDENT_PHONE`. Caller ID can be spoofed — this is a convenience layer, not authentication.
 
 ## Demo script (~90s)
 
-1. One sentence of stakes: a cloned-voice "IRS" / "grandchild in trouble" call.
-2. Teammate calls the number live and plays the scammer.
-   Agent screens → dashboard lights up → score climbs → agent asks a verification
-   question → scammer deflects → verdict flips to BLOCK.
-3. Second live call: a normal caller ("it's Dave confirming Tuesday") → low score → PASS.
-   The contrast is the pitch.
+1. **Stakes:** AI screens calls so scam callers never reach you; legit callers get through.
+2. **Scam call (live):** Teammate plays IRS/gift-card script → dashboard score climbs → agent interrogates → deflects → BLOCK → auto-hangup.
+3. **Known contact:** Call from a number in `contacts.json` → instant PASS + transfer (no screening).
+4. **Unknown legit caller:** "Dave confirming lunch Tuesday" → brief screen → PASS → transfer.
+
+**Offline UI rehearsal:** run `demo_dashboard.py` while the dashboard is open.
 
 ## Demo-day risks
 
-- Venue WiFi is hostile to realtime audio. Bring a phone hotspot; test on it.
+- Venue WiFi is hostile to realtime audio — bring a phone hotspot.
 - Warm the pipeline with one throwaway call before presenting (cold start is slow).
 - Twilio trial accounts add a preamble and restrict numbers — upgrade/verify beforehand.
-- Stay on the conversational-intent story. Phone audio is 8kHz; do NOT claim acoustic deepfake detection.
+- Test SIP REFER transfer to `RESIDENT_PHONE` before demo day.
+- Stay on the conversational-intent story. Phone audio is 8 kHz; do NOT claim acoustic deepfake detection.
+
+## Docs
+
+Full implementer context: [docs/handoff.md](../docs/handoff.md)
