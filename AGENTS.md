@@ -107,8 +107,8 @@ If `AgentServer` / `@server.rtc_session()` errors on install, check the installe
 
 ## Open build items
 
-1. Dashboard known-contact banner on `call_start.contact`.
-2. Additive scam score bumps for repeated signals/deflections (hangup partially covers persistence today).
+1. Additive scam score bumps for repeated signals/deflections (hangup partially covers persistence today).
+2. Dashboard known-contact banner on `call_start.contact`.
 3. Smarter claim-based interrogation challenges.
 4. Concrete LiveKit-inbound-Twilio checklist with exact `lk` CLI commands.
-5. Blocklist: manual unblock UI, export, optional Twilio SMS on new flags.
+5. Blocklist polish: export CSV, bulk clear; optional Twilio SMS alerts.

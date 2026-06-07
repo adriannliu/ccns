@@ -1,186 +1,157 @@
-# Phish-Blocker — Implementer Handoff
+# Phish-Blocker — Agent Handoff (June 2026)
 
-A conversational-AI phone-call screener for a hackathon. An inbound call is intercepted by
-an AI agent that screens the caller, detects scam/vishing signals in real time,
-interrogates suspicious callers, cold-transfers verified callers to the resident, and
-renders a live PASS/CHALLENGE/BLOCK verdict on a dashboard.
+Copy this doc (or point agents at `AGENTS.md` + this file) before coding. B2C hackathon project: AI phone screener that detects scam calls, interrogates suspicious callers, blocks/flags repeat offenders, and cold-transfers legit callers to the resident.
 
-**Status (June 2026):** MVP plus post-MVP features shipped — real Twilio calls, Moss retrieval,
-contact fast-path, scam blocklist with History panel, repeat-caller auto-block, SIP cold transfer
-on PASS, auto-hangup on sustained risk, upgraded dashboard.
-See [Tested vs. assumed](#tested-vs-assumed) for what still needs live validation.
+---
+
+## Current status
+
+**Working on real Twilio calls:** inbound SIP → LiveKit agent screens conversation → live dashboard updates → PASS transfers to resident → BLOCK/CHALLENGE saves caller to blocklist → repeat callers auto-rejected.
+
+| Area | Status |
+|---|---|
+| Live screening + Moss tactic retrieval | Shipped |
+| Dashboard (Live + History tabs) | Shipped |
+| Contact allowlist fast-path (PASS + transfer) | Shipped |
+| Scam blocklist + History management | Shipped |
+| SIP cold transfer on PASS | Shipped — verify on your trunk |
+| Auto-hangup on sustained high score | Shipped |
+| Console call summaries | Shipped (no Twilio SMS) |
+
+---
 
 ## Hard constraints (do not reverse)
 
-- **No acoustic/voice-clone detection.** Phone audio is 8 kHz mu-law; detect scam intent from the
-  *conversation* only (urgency, authority impersonation, payment demands, refusal to verify identity).
-- **Interrogation is the core feature.** On scam signals, ask a verification question a legit caller
-  answers instantly but a scammer can't, and note if they deflect.
-- **B2C/local demo only.** No carrier integration, no enterprise dashboard.
-- **Dashboard server is aiohttp** (`dashboard.py`), not FastAPI/uvicorn.
-- **Agent is a LiveKit worker** (`python -m phish_blocker.agent dev`), not a web service — no inbound port.
-- Code style: **Allman/BSD braces**, **minimal comments**, **correctness first** — always state what is
-  tested vs. assumed.
+1. **No acoustic / voice-clone detection** — 8 kHz phone audio; detect scam intent from *conversation* only.
+2. **Interrogation is core** — verification questions legit callers answer; scammers deflect.
+3. **B2C / local demo** — no carrier integration, no enterprise multi-tenant.
+4. **Dashboard = aiohttp** (`dashboard.py`), not FastAPI.
+5. **Agent = LiveKit worker** (`python -m phish_blocker.agent dev`), not a web service.
+6. **Code style:** Allman/BSD braces, minimal comments, state what's tested vs. assumed.
+
+---
 
 ## Stack
 
-| Layer | Technology |
+| Layer | Tech |
 |---|---|
-| Telephony | Twilio number + TwiML Bin → LiveKit SIP |
-| Agent runtime | `livekit-agents ~=1.5` |
-| Speech model | AWS Bedrock **Nova Sonic 2** (`aws.realtime.RealtimeModel.with_nova_sonic_2`) |
+| Telephony | Twilio number → TwiML Bin → LiveKit SIP |
+| Agent | `livekit-agents ~=1.5`, `AgentServer`, `@server.rtc_session(agent_name="agent-py")` |
+| Speech | AWS Bedrock **Nova Sonic 2** (`aws.realtime.RealtimeModel.with_nova_sonic_2`) |
 | VAD | Silero |
-| Scam tactic retrieval | **Moss** (`moss_tactics.py`, 30-tactic corpus in `data/scam_tactics.jsonl`) |
+| Scam tactics | Moss semantic retrieval (`moss_tactics.py`, 30 tactics in `data/scam_tactics.jsonl`) |
 | Dashboard | aiohttp + vanilla JS WebSocket |
-| Alerts | Console call summary when score crosses threshold (`notify.py`) |
-| Transfer | LiveKit SIP REFER cold transfer (`transfer.py`) |
-| Contacts | Local JSON allowlist (`contacts.py`, `data/contacts.json`) |
-| Blocklist | Local JSON flagged numbers (`blocklist.py`, `data/blocklist.json`) |
+| Data stores | `data/contacts.json`, `data/blocklist.json` (local JSON, not SQLite) |
 
-## Data flow
+---
+
+## Call flow (priority order)
 
 ```
-Caller
-  → Twilio (TwiML Bin → SIP)
-  → LiveKit inbound trunk + dispatch rule → room
-  → agent.py entrypoint
-      ├─ known caller ID in contacts.json? → PASS + cold transfer (no agent)
-      ├─ flagged caller ID in blocklist.json? → instant BLOCK + delete_room (no agent)
-      └─ else ScreeningAgent joins
-          ├─ per caller turn: Moss retrieval (moss_tactics.py)
-          ├─ LLM tools: flag_scam_signal() / set_recommendation()
-          ├─ block/challenge → blocklist.py record → history_entry event
-          ├─ sustained high score → hangup.py (auto BLOCK + record + goodbye + delete_room)
-          ├─ PASS → transfer.py (handoff speech + SIP REFER → RESIDENT_PHONE)
-          └─ elevated score → notify.py console summary
-  → bus.py POST /ingest → dashboard.py /ws → static/index.html
-  → dashboard GET /api/history → History panel
+Inbound PSTN call
+  → LiveKit room, SIP participant
+  → Read sip.phoneNumber
+
+  1. contacts.json match?     → PASS + cold SIP REFER to RESIDENT_PHONE (no agent)
+  2. blocklist.json match?      → instant BLOCK + delete_room (no agent)
+  3. else ScreeningAgent        → converse, Moss + LLM tools
+       → block/challenge        → write blocklist.json + History tab
+       → sustained high score   → auto BLOCK + hangup + blocklist write
+       → pass                   → handoff speech + cold transfer
 ```
+
+**Contacts beat blocklist** if a number is in both files.
+
+---
 
 ## Repo map
 
 ```
 ccns/
-├── AGENTS.md
-├── docs/
-│   ├── handoff.md          # this file
-│   └── objection-ai.md     # separate venture notes, NOT phish-blocker
+├── AGENTS.md                    # short agent entry point
+├── docs/handoff.md              # this file
 └── phish-blocker/
     ├── phish_blocker/
-    │   ├── agent.py        # ScreeningAgent, contact fast-path, tools
-    │   ├── transfer.py     # SIP REFER cold transfer on PASS
-    │   ├── contacts.py     # JSON contacts lookup (E.164 normalize)
-    │   ├── blocklist.py    # Flagged numbers + repeat-caller reject
-    │   ├── hangup.py       # Auto-block + record + goodbye + room teardown
-    │   ├── moss_tactics.py # Moss retrieval + scam score
-    │   ├── corpus.py       # loads data/scam_tactics.jsonl
-    │   ├── notify.py       # Console summaries + hangup thresholds
-    │   ├── dashboard.py    # aiohttp: /, /ws, /ingest, /api/history, /static
-    │   ├── bus.py          # HTTP POST to dashboard /ingest
-    │   └── ssl_certs.py    # cert bundle for Moss HTTPS
-    ├── static/index.html   # live dashboard (transcript, History, score ring, verdict)
+    │   ├── agent.py             # ScreeningAgent, fast-paths, LLM tools
+    │   ├── transfer.py          # SIP REFER cold transfer
+    │   ├── contacts.py          # allowlist load/lookup/add
+    │   ├── blocklist.py         # flagged numbers record/lookup/remove/reject
+    │   ├── hangup.py            # auto-block, record blocklist, goodbye, delete_room
+    │   ├── moss_tactics.py      # Moss retrieval + scam score
+    │   ├── corpus.py            # scam_tactics.jsonl loader
+    │   ├── notify.py            # console summaries + hangup thresholds
+    │   ├── dashboard.py         # aiohttp server + REST + WebSocket
+    │   └── bus.py               # agent → POST /ingest
+    ├── static/index.html        # dashboard UI (Live | History tabs)
     ├── data/
-    │   ├── contacts.json   # known callers allowlist
-    │   ├── blocklist.json  # flagged/blocked numbers + reasons
-    │   ├── scam_tactics.jsonl
-    │   └── SOURCES.md
-    ├── scripts/
-    │   ├── build_moss_index.py
-    │   ├── bench_retrieval.py
-    │   ├── demo_dashboard.py   # replay scam script to /ingest
-    │   ├── demo_scripts.md
-    │   └── verify_aws.py
-    ├── pyproject.toml
-    └── .env.example
+    │   ├── contacts.json        # known safe callers
+    │   ├── blocklist.json       # flagged/blocked callers + reasons
+    │   └── scam_tactics.jsonl
+    └── scripts/
+        ├── build_moss_index.py
+        ├── demo_dashboard.py    # offline UI replay
+        └── demo_scripts.md
 ```
 
-## Key implementation details
+---
 
-### `agent.py` — ScreeningAgent
+## Key modules
 
-- **`CallState`:** `scam_score`, `signals[]`, `seen_tactics`, `recommendation`, `reason`,
-  `caller_id`, `alert_sent`, `hangup_started`, `elevated_turns`, `transfer_started`, `blocklist_recorded`
-- **Contact fast-path** (`_try_contact_fastpath`): `sip.phoneNumber` → `contacts.lookup()` → PASS + transfer
-- **Blocklist fast-path** (`_try_blocklist_fastpath`): `sip.phoneNumber` → `blocklist.lookup()` → instant BLOCK via `reject_repeat_caller()`
-- **Fast-path order:** contacts first (PASS wins over blocklist if number is in both)
-- **`screen_caller_text(text)`:** Moss retrieval with `prior=state.scam_score`; deduped tactic signals;
-  tracks `elevated_turns` when score ≥ hangup threshold
-- **`flag_scam_signal(label, confidence)`:** `score = max(current, confidence)` — does not accumulate
-- **`set_recommendation(pass|challenge|block)`:** pushes verdict; `pass` → transfer; `block` → hangup
-  (records to blocklist); `challenge` → records to blocklist + console summary if threshold met
-- **Shutdown callback:** prints console summary on call end if suspicious
+### `agent.py`
+- **`CallState`:** `scam_score`, `signals`, `caller_id`, `recommendation`, `reason`, `elevated_turns`, `blocklist_recorded`, etc.
+- **Tools:** `flag_scam_signal(label, confidence)`, `set_recommendation(pass|challenge|block, reason)`
+- **Blocklist writes:** `challenge` → `_record_flagged()`; `block` → `hangup.py` → `_record_blocklist()`
+- **Requires `caller_id`** from `sip.phoneNumber` for blocklist writes; skips if missing
 
-### `transfer.py` — Cold transfer
+### `blocklist.py`
+- `record(phone, recommendation, reason, scam_score, signals)` — upsert to `data/blocklist.json`
+- `lookup(phone)` / `remove(phone)` / `list_history()`
+- `reject_repeat_caller()` — fast-path for repeat inbound calls
 
-- Enabled when `RESIDENT_PHONE` is set and `TRANSFER_ENABLED` is not false
-- On PASS: handoff speech → `job_ctx.transfer_sip_participant()` tries `+1...`, `tel:+1...`,
-  optional `sip:+1...@TWILIO_PSTN_DOMAIN` → session shutdown
-- Known contacts: silent transfer (no agent speech)
-- Dashboard events: `type: "transfer"`, `status: initiated | connected | failed`
+### `contacts.py`
+- `lookup(phone)` — allowlist fast-path
+- `add(phone, name, relationship)` — used when user "Mark as Safe + allowlist" in History tab
 
-### `contacts.py` — Allowlist
+### `transfer.py`
+- `maybe_transfer_call()` on PASS — handoff speech then `transfer_sip_participant()`
+- Targets: `+1...`, `tel:+1...`, `sip:+1...@TWILIO_PSTN_DOMAIN`
+- Needs `RESIDENT_PHONE`; `TWILIO_PSTN_DOMAIN` required for most Twilio PSTN transfers
 
-- Loads `data/contacts.json`; normalizes phones to E.164
-- `lookup(number)` → `Contact | None`
-- CLI: `python -m phish_blocker.contacts [number]`
+### `hangup.py`
+- Triggers on explicit `block` OR score ≥ `HANGUP_SCORE_THRESHOLD` (0.66) for `HANGUP_EXCHANGES_REQUIRED` (2) elevated turns
+- Records blocklist, speaks goodbye, shuts down session, `delete_room()`
 
-### `blocklist.py` — Flagged scammer numbers
+### `moss_tactics.py`
+- Score = `max(prior, best_confidence + corroboration)`; corroboration +0.05/category (cap 0.15)
+- `flag_scam_signal` still uses `max(score, confidence)` — does not accumulate per repeated signal
 
-- Loads `data/blocklist.json`; normalizes phones via `contacts.normalize()`
-- `record(phone, recommendation, reason, scam_score, signals)` — upserts by phone, increments `flag_count`
-- `lookup(number)` → `BlockedEntry | None`
-- `list_history()` → sorted list for dashboard
-- `reject_repeat_caller(job_ctx, participant, entry)` — instant BLOCK + `delete_room`, no agent
-- Records on **block** (via `hangup.py`) and **challenge** (via `set_recommendation`)
-- CLI: `python -m phish_blocker.blocklist [number]`
+---
 
-**Entry shape:**
+## Dashboard
 
-```json
-{
-  "phone": "+15551234567",
-  "first_flagged_at": "2026-06-07T14:32:00+00:00",
-  "last_flagged_at": "2026-06-07T14:32:00+00:00",
-  "flag_count": 1,
-  "recommendation": "block",
-  "reason": "Pressed for gift cards and refused case reference.",
-  "scam_score": 0.95,
-  "signals": ["IRS gift-card payment demand", "refused verification"]
-}
-```
+### Tabs
+- **Live Screening** — transcript, threat gauge, tactic chips, verdict, transfer status
+- **History** — full-page grid of flagged numbers from `blocklist.json`
 
-### `hangup.py` — Auto-hangup
+### REST API
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/history` | List all blocklist entries |
+| DELETE | `/api/history` | Body: `{"phone": "+1..."}` — remove from blocklist |
+| POST | `/api/history/verify` | Body: `{"phone", "add_to_contacts?", "name?"}` — mark safe, optional allowlist |
 
-- Triggers when `recommendation == "block"` OR score ≥ `HANGUP_SCORE_THRESHOLD` (default 0.66)
-  for `HANGUP_EXCHANGES_REQUIRED` (default 2) consecutive elevated caller turns
-- Records to blocklist before goodbye (uses `state.caller_id`)
-- Goodbye speech → `session.shutdown()` → `job_ctx.delete_room()`
-- Forces verdict to BLOCK if triggered by score alone
-
-### `moss_tactics.py` — Scoring
-
-- Confirmed match: red-flag keyword hit + semantic score ≥ 0.45
-- Score = `max(prior, best_confidence + corroboration)`; corroboration +0.05 per distinct category (cap 0.15)
-- Prior never drops mid-call; repeated same-confidence LLM signals do not add
-
-### `notify.py` — Console summaries
-
-- Prints formatted summary to stdout when score ≥ `NOTIFY_SCORE_THRESHOLD` or verdict is block/challenge
-- **No Twilio SMS** in current code
-
-### Dashboard events
-
-| Event | Payload highlights |
+### WebSocket events (`/ws`, also via POST `/ingest`)
+| Event | Notes |
 |---|---|
-| `call_start` | optional `caller_id`, `contact`, `blocklist_hit` |
+| `call_start` | `caller_id`, `contact`, `blocklist_hit` |
 | `transcript` | `role`, `text` |
-| `signal` | `label`, `confidence`, `scam_score`, `explanation` |
+| `signal` | Moss/LLM hit + `scam_score` |
 | `verdict` | `recommendation`, `reason`, `scam_score` |
-| `transfer` | `status`, `to`, `reason`, `error` |
-| `history_entry` | `entry` (full blocklist record) |
+| `transfer` | `status`: initiated \| connected \| failed |
+| `history_entry` | new/updated blocklist row |
+| `history_removed` | phone removed from blocklist |
 
-Dashboard **History** panel loads via `GET /api/history` on page open and updates live on `history_entry`.
-Known-contact banner on `call_start` is not yet rendered.
+---
 
 ## Environment variables
 
@@ -193,93 +164,88 @@ NOTIFY_SCORE_THRESHOLD=0.66
 HANGUP_SCORE_THRESHOLD=0.66
 HANGUP_EXCHANGES_REQUIRED=2
 RESIDENT_PHONE=+1XXXXXXXXXX
-TWILIO_PSTN_DOMAIN=          # optional, for SIP URI transfer target
-TRANSFER_ENABLED=true        # set false to disable transfer
+TWILIO_PSTN_DOMAIN=mytrunk.pstn.twilio.com
+TRANSFER_ENABLED=true
 ```
 
-## Run (local)
+---
+
+## Run locally
 
 ```bash
 cd phish-blocker
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
-cp .env.example .env
+cp .env.example .env   # fill keys; enable Nova Sonic 2 in Bedrock
 
-python -m phish_blocker.dashboard          # terminal 1 → http://localhost:8080
-python -m phish_blocker.agent dev          # terminal 2 → LiveKit worker
+# Terminal 1
+python -m phish_blocker.dashboard    # http://localhost:8080
+
+# Terminal 2
+python -m phish_blocker.agent dev
+
+# One-time Moss index
+python scripts/build_moss_index.py
+
+# Offline dashboard demo
+python scripts/demo_dashboard.py
 ```
 
-- `agent.py` is a worker, not a web service: no uvicorn, no inbound port.
-- Telephony must be set up before a real call connects.
-- Moss index: `python scripts/build_moss_index.py`
-- Dashboard-only demo: `python scripts/demo_dashboard.py`
+**Telephony:** Twilio number → TwiML Bin → LiveKit SIP URI. Inbound trunk + dispatch rule via `lk` CLI. **Trunk creds must match TwiML Bin.** Enable Call Transfers + PSTN transfers on Twilio Elastic SIP trunk.
 
-## Telephony setup (do first — riskiest part)
-
-Follow LiveKit's "Inbound calls via Twilio" guide:
-
-1. Twilio: buy a voice-capable number; create a TwiML Bin pointing at the LiveKit SIP URI.
-2. LiveKit (`lk` CLI): create an inbound trunk + dispatch rule. **Trunk username/password must match
-   the TwiML Bin** — the #1 reason a call connects to nothing.
-3. Set `RESIDENT_PHONE` and test cold transfer (SIP REFER) on a real call.
-4. Run both processes, call the number, confirm screening + transfer behavior.
+---
 
 ## Tested vs. assumed
 
-| Status | Item |
+| | |
 |---|---|
-| **Tested** | Dashboard pipeline (agent event → bus → /ingest → /ws → browser) |
-| **Tested** | Real Twilio inbound calls; agent screens and detects scams |
-| **Tested** | Moss retrieval (with creds/index) |
-| **Tested** | Dashboard UI replay via `demo_dashboard.py` |
-| **Assumed / verify on real call** | SIP REFER cold transfer to `RESIDENT_PHONE` |
-| **Assumed / verify on real call** | Contact fast-path via `sip.phoneNumber` attribute |
-| **Assumed / verify on real call** | Auto-hangup after sustained elevated score |
-| **Assumed / verify on real call** | Blocklist repeat-caller fast-path on real SIP caller ID |
-| **Tested** | Blocklist record/lookup; History panel via `demo_dashboard.py` |
-| **Not built** | Additive score escalation / `score_update` events |
-| **Not built** | Dashboard known-contact banner, contacts CRUD UI, blocklist unblock UI |
+| **Tested** | Dashboard pipeline, Moss retrieval, History tab, blocklist record/remove API |
+| **Tested** | Real Twilio inbound screening (per team) |
+| **Assumed — verify live** | SIP REFER transfer to `RESIDENT_PHONE` |
+| **Assumed — verify live** | `sip.phoneNumber` present on inbound SIP (required for blocklist) |
+| **Assumed — verify live** | Blocklist repeat-caller fast-path on real calls |
+| **Assumed — verify live** | Auto-hangup after sustained elevated score |
 
-## Open build items
+**#1 blocklist failure mode:** caller ID missing → calls block on dashboard but `data/blocklist.json` stays empty.
 
-### Near-term polish
+---
 
-1. Dashboard: show known-contact banner when `call_start.contact` is set.
-2. Validate SIP REFER transfer end-to-end on production Twilio trunk.
-3. Validate blocklist repeat-caller fast-path on real Twilio SIP caller ID.
-4. Additive scam score bumps for repeated signals/deflections (optional; hangup partially covers persistence).
+## Demo script (~2 min)
 
-### Other backlog
+1. **Scam call** — IRS/gift-card script → score climbs → BLOCK → appears in History tab.
+2. **Repeat scammer** — same number calls again → instant BLOCK (no agent).
+3. **Accidental flag** — History → Mark as Safe (optionally add to contacts).
+4. **Known contact** — number in `contacts.json` → silent PASS + transfer.
+5. **Unknown legit** — brief screen → PASS → transfer.
 
-1. Blocklist: manual unblock/delete in dashboard, export to CSV.
-2. Smarter claim-based interrogation challenges.
-3. Optional Twilio SMS alerts (restored alongside console summary).
-4. Concrete LiveKit-inbound-Twilio checklist with exact `lk` CLI commands.
+---
 
-## Demo scripts
+## Open / next work
 
-**Scam (~60s) → BLOCK** (`scripts/demo_scripts.md`):
+1. **Additive scam score** — score plateaus on repeated signals; hangup covers persistence partially.
+2. **Known-contact banner** on Live tab when `call_start.contact` is set.
+3. **SIP/telephony hardening** — transfer failures, caller ID edge cases, exact `lk` CLI checklist.
+4. **Smarter claim-based interrogation** — dynamic verification per caller story.
+5. **Optional Twilio SMS alerts** (removed; console summary only today).
+6. **Blocklist polish** — export CSV, bulk clear, incident detail view.
 
-1. IRS officer, back taxes, arrest warrant
-2. Gift cards, stay on the line
-3. Refuses case number → block + auto-hangup
+---
 
-**Legit (~30s) → PASS + transfer:**
+## Files to read first
 
-1. Dave confirming lunch Tuesday — brief screen, pass, cold transfer
+1. `AGENTS.md` — constraints + repo map
+2. `phish_blocker/agent.py` — all call logic
+3. `phish_blocker/blocklist.py` + `contacts.py` — fast-path symmetry
+4. `phish_blocker/transfer.py` — telephony risk area
+5. `static/index.html` — dashboard tabs + History UX
+6. `phish_blocker/dashboard.py` — REST endpoints
 
-**Known contact:** call from number in `data/contacts.json` → silent pass + transfer
+---
 
-**Repeat scammer:** same number calls again after being flagged → instant block (no agent)
+## Agent instructions
 
-**Offline dashboard:** `python scripts/demo_dashboard.py` (includes sample `history_entry`)
-
-## Files to read before coding
-
-1. `AGENTS.md` — constraints and repo map
-2. `phish_blocker/agent.py` — call logic, fast-path, tools
-3. `phish_blocker/transfer.py` — SIP REFER transfer
-4. `phish_blocker/contacts.py` — allowlist pattern
-5. `phish_blocker/blocklist.py` — flagged numbers + repeat-caller reject
-6. `phish_blocker/hangup.py` — block trigger + blocklist record
-7. `phish_blocker/moss_tactics.py` — scoring model
+- Read this file before non-trivial changes.
+- Do not add FastAPI, voice biometrics, or carrier APIs.
+- Prefer extending existing JSON stores (`contacts.json`, `blocklist.json`) over new DB layers for demo scope.
+- Always note tested vs. assumed in PRs/commits.
+- Telephony changes need a real-call test plan.
