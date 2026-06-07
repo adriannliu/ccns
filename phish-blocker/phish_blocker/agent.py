@@ -70,6 +70,10 @@ Verdicts:
 set_recommendation reason must be one judge-readable sentence about what they SAID or DID.
 Good: "Pressed for prepaid cards and refused to provide a case reference." Bad: "high confidence risk".
 
+Once you are confident this is a scam, flag the decisive signal (or set_recommendation
+"block") and then STOP — do not ask more questions or keep the conversation going. The
+system automatically delivers a brief goodbye and ends the call; let it.
+
 Never reveal personal information about the resident. Never confirm details the caller asks
 you to validate.
 
@@ -139,13 +143,14 @@ class ScreeningAgent(Agent):
         self.state.blocklist_recorded = True
         await bus.push({"type": "history_entry", "entry": entry})
 
-    async def maybe_hangup(self, trigger: str):
+    async def maybe_hangup(self, trigger: str, force: bool = False):
         await maybe_hangup_call(
             session=self.session,
             job_ctx=self._job_ctx,
             state=self.state,
             trigger=trigger,
             send_summary=self.maybe_send_summary,
+            force=force,
         )
 
     def _track_elevated_turn(self):
@@ -177,6 +182,14 @@ class ScreeningAgent(Agent):
                     {"label": top.label, "confidence": top.confidence}
                 )
                 await bus.push(event)
+                if not self.state.reason:
+                    self.state.reason = (
+                        event.get("explanation")
+                        or f"Matched known scam tactic: {top.label}."
+                    )
+                # Confirmed scam tactic (semantic + red-flag match): end the call now.
+                await self.maybe_hangup("scam_detected", force=True)
+                return
 
         await self.maybe_hangup("threshold")
 
@@ -204,7 +217,13 @@ class ScreeningAgent(Agent):
                 "scam_score": self.state.scam_score,
             }
         )
-        await self.maybe_hangup("threshold")
+        # A confident risk signal means scam detected: end the call now.
+        if confidence >= hangup_threshold():
+            if not self.state.reason:
+                self.state.reason = f"Flagged for {label}."
+            await self.maybe_hangup("scam_detected", force=True)
+        else:
+            await self.maybe_hangup("threshold")
         return "Recorded."
 
     @function_tool
@@ -297,6 +316,55 @@ async def _try_contact_fastpath(
     return True
 
 
+_FAREWELL_PERSONA = (
+    "You are a polite call screener ending a call that cannot be connected. Speak only "
+    "plain, conversational sentences. Never mention scores, systems, blocklists, or tools."
+)
+
+_REPEAT_GOODBYE = (
+    "This number was flagged on a previous call, so you cannot connect it. In one brief, "
+    "polite, natural turn, say you are unable to connect the call, that if this is an "
+    "emergency the host will reach back out, wish them a good day, and say goodbye."
+)
+
+
+def _build_session() -> AgentSession:
+    region = os.getenv("AWS_DEFAULT_REGION") or os.getenv("AWS_REGION")
+    llm_kwargs = {
+        "voice": "matthew",
+        "turn_detection": "MEDIUM",
+        "tool_choice": "auto",
+    }
+    if region:
+        llm_kwargs["region"] = region
+    return AgentSession(
+        vad=silero.VAD.load(),
+        llm=aws.realtime.RealtimeModel.with_nova_sonic_2(**llm_kwargs),
+    )
+
+
+async def _speak_goodbye_and_hangup(ctx: JobContext, line: str) -> None:
+    """Spin up a brief session to speak a goodbye, then tear down the room."""
+    if ctx.is_fake_job():
+        return
+    session = _build_session()
+    try:
+        await session.start(agent=Agent(instructions=_FAREWELL_PERSONA), room=ctx.room)
+        handle = session.generate_reply(instructions=line, allow_interruptions=False)
+        await handle
+    except Exception as e:
+        logger.warning("repeat-caller goodbye failed: %s", e)
+    finally:
+        try:
+            session.shutdown()
+        except Exception as e:
+            logger.warning("goodbye session shutdown failed: %s", e)
+        try:
+            await ctx.delete_room()
+        except Exception as e:
+            logger.warning("delete_room failed: %s", e)
+
+
 async def _try_blocklist_fastpath(
     ctx: JobContext,
     participant: rtc.RemoteParticipant,
@@ -306,7 +374,10 @@ async def _try_blocklist_fastpath(
     if entry is None:
         return False
 
-    return await blocklist.reject_repeat_caller(ctx, participant, entry)
+    # Record + dashboard events immediately, then say goodbye before hanging up.
+    await blocklist.announce_repeat_caller(entry)
+    await _speak_goodbye_and_hangup(ctx, _REPEAT_GOODBYE)
+    return True
 
 
 @server.rtc_session(agent_name="agent-py")
@@ -324,20 +395,7 @@ async def entrypoint(ctx: JobContext):
         return
 
     agent = ScreeningAgent(job_ctx=ctx, caller_id=caller_id)
-
-    region = os.getenv("AWS_DEFAULT_REGION") or os.getenv("AWS_REGION")
-    llm_kwargs = {
-        "voice": "matthew",
-        "turn_detection": "MEDIUM",
-        "tool_choice": "auto",
-    }
-    if region:
-        llm_kwargs["region"] = region
-
-    session = AgentSession(
-        vad=silero.VAD.load(),
-        llm=aws.realtime.RealtimeModel.with_nova_sonic_2(**llm_kwargs),
-    )
+    session = _build_session()
 
     @session.on("conversation_item_added")
     def _on_item(ev):

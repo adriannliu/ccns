@@ -39,10 +39,11 @@ async def maybe_hangup_call(
     state,
     trigger: str,
     send_summary,
+    force: bool = False,
 ) -> None:
     if state.hangup_started:
         return
-    if not should_hangup(
+    if not force and not should_hangup(
         state.scam_score,
         state.recommendation,
         state.elevated_turns,

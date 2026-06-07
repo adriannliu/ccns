@@ -192,11 +192,24 @@ def record(
     return entry.to_dict()
 
 
-async def reject_repeat_caller(job_ctx, participant, entry: BlockedEntry) -> bool:
+async def announce_repeat_caller(entry: BlockedEntry) -> dict | None:
+    """Record the repeat scammer immediately and push dashboard events.
+
+    Does NOT tear down the room — the caller flow speaks a goodbye first, then hangs up.
+    """
     from phish_blocker import bus
 
     reason = f"Previously flagged: {entry.reason}"
     logger.info("blocklist fast-path BLOCK %s (flag_count=%d)", entry.phone, entry.flag_count)
+
+    # Record to history immediately, before anything else.
+    updated = record(
+        entry.phone,
+        recommendation="block",
+        reason=reason,
+        scam_score=entry.scam_score,
+        signals=[{"label": s} for s in entry.signals],
+    )
 
     await bus.push(
         {
@@ -213,6 +226,8 @@ async def reject_repeat_caller(job_ctx, participant, entry: BlockedEntry) -> boo
             "scam_score": entry.scam_score,
         }
     )
+    if updated is not None:
+        await bus.push({"type": "history_entry", "entry": updated})
 
     await begin_scam_handling(
         trigger="repeat_caller",
@@ -222,23 +237,7 @@ async def reject_repeat_caller(job_ctx, participant, entry: BlockedEntry) -> boo
         repeat_caller=True,
     )
 
-    updated = record(
-        entry.phone,
-        recommendation="block",
-        reason=reason,
-        scam_score=entry.scam_score,
-        signals=[{"label": s} for s in entry.signals],
-    )
-    if updated is not None:
-        await bus.push({"type": "history_entry", "entry": updated})
-
-    try:
-        await job_ctx.delete_room()
-    except Exception as e:
-        logger.warning("blocklist reject delete_room failed: %s", e)
-        return False
-
-    return True
+    return updated
 
 
 if __name__ == "__main__":
