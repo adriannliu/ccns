@@ -61,6 +61,11 @@ def should_hangup(
 ) -> bool:
     if recommendation == "block":
         return True
+    # An explicit "pass" is the screener's judgement that the caller is legitimate;
+    # the score heuristic must never override it and tear down a call that is about
+    # to be connected.
+    if recommendation == "pass":
+        return False
     return (
         scam_score >= hangup_threshold()
         and elevated_turns >= hangup_exchanges_required()

@@ -264,6 +264,11 @@ class ScreeningAgent(Agent):
             recommendation = "challenge"
         self.state.recommendation = recommendation
         self.state.reason = reason
+        # The screener cleared this caller as legitimate; reflect that on the risk
+        # gauge instead of leaving it pinned at whatever the running score climbed
+        # to during interrogation.
+        if recommendation == "pass":
+            self.state.scam_score = min(self.state.scam_score, 0.1)
         await bus.push(
             {
                 "type": "verdict",

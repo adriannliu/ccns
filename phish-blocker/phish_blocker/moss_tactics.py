@@ -46,6 +46,14 @@ CORROBORATION_CAP = 0.15
 # turns (payment demand + deflection + urgency), which then accumulate past the cap.
 SEM_TURN_CAP = _env_float("MOSS_SEM_TURN_CAP", 0.45)
 
+# Semantic relevance alone (the caller talks about a bank, a delivery, money) is
+# topic-adjacency, not evidence of a scam — a legitimate caller hits the same
+# tactics. Without the caller's own red-flag phrasing, cap the *accumulated* score
+# here so it stays in the "suspicious" band: below the hang-up threshold and below
+# the dashboard's HIGH/CRITICAL levels. Literal red-flag phrasing, multiple turns
+# of it, or an explicit flag_scam_signal are what escalate past this ceiling.
+PASSIVE_SCORE_CEILING = _env_float("MOSS_PASSIVE_SCORE_CEILING", 0.45)
+
 _STOPWORDS = {
     "the", "a", "an", "your", "you", "to", "of", "and", "or", "is", "are",
     "in", "on", "for", "me", "my", "i", "it", "they", "them", "this", "that",
@@ -190,7 +198,17 @@ def compute_scam_score(matches: list[TacticMatch], prior: float = 0.0) -> float:
     # deflections across turns escalate to a confident verdict, while a single
     # mention stays in the suspicious band and lets the screener interrogate first.
     accumulated = prior + turn_evidence * (1.0 - prior)
-    return min(1.0, max(prior, accumulated))
+    score = min(1.0, max(prior, accumulated))
+
+    # Topic-adjacency without the caller's own red-flag phrasing must not ratchet a
+    # legitimate call into HIGH/CRITICAL turn after turn. Hold the running score at
+    # the passive ceiling unless a prior turn already escalated it on real evidence
+    # (red-flag phrasing or an explicit flag_scam_signal), which we never undo.
+    has_red_flags = any(m.matched_red_flags for m in relevant)
+    if not has_red_flags:
+        score = min(score, max(prior, PASSIVE_SCORE_CEILING))
+
+    return score
 
 
 async def init_moss(index: str | None = None, model_id: str | None = None) -> bool:

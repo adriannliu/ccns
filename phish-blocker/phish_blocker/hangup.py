@@ -46,6 +46,12 @@ async def maybe_hangup_call(
     if state.hangup_started:
         return
 
+    # A cold transfer to the resident is already underway (verdict was "pass").
+    # Never tear that call down — not even on a forced hang-up — or the caller
+    # gets dropped after being told they are being connected.
+    if getattr(state, "transfer_started", False):
+        return
+
     # Hard floor: always give the caller a few chances to justify themselves
     # before ANY hang-up, even a forced one. A single alarming line ("gift card")
     # is grounds to interrogate, not to immediately tear down the call. Force only
