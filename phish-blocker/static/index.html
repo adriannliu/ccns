@@ -72,6 +72,7 @@
   .tab:hover { color: var(--text); }
   .tab.active { background: var(--panel2); color: var(--green); box-shadow: 0 0 12px rgba(46,230,160,.15); }
   .tab[data-tab="history"].active { color: var(--red); box-shadow: 0 0 12px rgba(255,77,94,.12); }
+  .tab[data-tab="contacts"].active { color: var(--green); box-shadow: 0 0 12px rgba(46,230,160,.18); }
 
   .header-status {
     margin-left: auto; display: flex; align-items: center; gap: 9px;
@@ -99,7 +100,8 @@
     gap: 16px; padding: 16px;
   }
 
-  #historyView {
+  #historyView,
+  #contactsView {
     grid-template-rows: auto 1fr;
     gap: 0; padding: 16px;
   }
@@ -261,6 +263,41 @@
   .hist-check { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); cursor: pointer; }
   .hist-check input { accent-color: var(--green); }
 
+  /* contacts tab */
+  .contacts-panel { flex: 1; min-height: 0; }
+  #contactsList {
+    flex: 1; min-height: 0; overflow-y: auto; padding-right: 8px;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; align-content: start;
+  }
+  #contactsList::-webkit-scrollbar { width: 8px; }
+  #contactsList::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+  .contact-card {
+    border: 1px solid var(--border2); border-left: 4px solid var(--green);
+    background: linear-gradient(160deg, rgba(46,230,160,.08), rgba(46,230,160,0) 55%), var(--panel2);
+    border-radius: 12px; padding: 16px; animation: slidein .3s ease;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .contact-name { font-size: 17px; font-weight: 700; }
+  .contact-phone { font-family: var(--mono); font-size: 14px; color: #c7cedd; }
+  .contact-rel {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--green); opacity: .85;
+  }
+  .contact-actions { margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .contact-form {
+    display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 10px; align-items: end;
+    margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border);
+  }
+  .contact-form label {
+    display: flex; flex-direction: column; gap: 6px;
+    font-family: var(--mono); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+  }
+  .contact-form input {
+    padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border2);
+    background: #0c111a; color: var(--text); font-size: 13px; font-family: inherit;
+  }
+  .contact-form input:focus { outline: none; border-color: var(--green); }
+
   .toast {
     position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(80px);
     z-index: 100; padding: 12px 20px; border-radius: 10px;
@@ -296,6 +333,7 @@
     <nav class="tabs">
       <button type="button" class="tab active" data-tab="live">Live Screening</button>
       <button type="button" class="tab" data-tab="history">History</button>
+      <button type="button" class="tab" data-tab="contacts">Contacts</button>
     </nav>
     <div class="header-status">
       <span class="dot" id="dot"></span><span id="status">Standby — waiting for call</span>
@@ -346,6 +384,32 @@
     </div>
   </main>
 
+  <main id="contactsView" class="view">
+    <div class="history-header">
+      <h2>Known Contacts Allowlist</h2>
+      <span class="history-count" id="contactsCount">0 contacts</span>
+    </div>
+    <div class="panel contacts-panel">
+      <div class="panel-title">Safe Caller Allowlist</div>
+      <p class="empty" style="margin:0 0 12px;line-height:1.5;">
+        Numbers here bypass screening and are cold-transferred straight to the resident. Caller ID can be spoofed — convenience only, not authentication.
+      </p>
+      <form class="contact-form" id="contactForm">
+        <label>Name
+          <input type="text" id="contactName" placeholder="Dave" required />
+        </label>
+        <label>Phone
+          <input type="tel" id="contactPhone" placeholder="+14155551234" required />
+        </label>
+        <label>Relationship
+          <input type="text" id="contactRel" placeholder="friend, family, …" />
+        </label>
+        <button type="submit" class="btn safe">Add Contact</button>
+      </form>
+      <div id="contactsList"><div class="empty">No contacts yet.</div></div>
+    </div>
+  </main>
+
   <div class="toast" id="toast"></div>
 
 <script>
@@ -355,6 +419,7 @@
   $("ring").style.strokeDashoffset = C;
 
   const historyByPhone = new Map();
+  const contactsByPhone = new Map();
   let activeTab = "live";
 
   function showToast(msg, ok = true) {
@@ -371,7 +436,9 @@
     });
     $("liveView").classList.toggle("active", name === "live");
     $("historyView").classList.toggle("active", name === "history");
+    $("contactsView").classList.toggle("active", name === "contacts");
     if (name === "history") loadHistory();
+    if (name === "contacts") loadContacts();
   }
 
   document.querySelectorAll(".tab").forEach((btn) => {
@@ -568,6 +635,117 @@
     }
   }
 
+  function buildContactCard(contact) {
+    const card = document.createElement("div");
+    card.className = "contact-card";
+    card.dataset.phone = contact.phone;
+    const rel = contact.relationship
+      ? `<div class="contact-rel">${contact.relationship}</div>`
+      : "";
+    card.innerHTML =
+      `<div class="contact-name">${contact.name}</div>` +
+      `<div class="contact-phone">${formatPhone(contact.phone)}</div>` +
+      rel +
+      `<div class="contact-actions">` +
+        `<button type="button" class="btn danger remove-contact-btn">Remove</button>` +
+      `</div>`;
+    card.querySelector(".remove-contact-btn").addEventListener("click", () => removeContact(contact.phone, card));
+    return card;
+  }
+
+  function renderContacts(list) {
+    contactsByPhone.clear();
+    const box = $("contactsList");
+    box.innerHTML = "";
+    $("contactsCount").textContent = `${list.length} contact${list.length === 1 ? "" : "s"}`;
+    if (!list.length) {
+      box.innerHTML = '<div class="empty">No contacts yet.</div>';
+      return;
+    }
+    for (const contact of list) {
+      contactsByPhone.set(contact.phone, contact);
+      box.appendChild(buildContactCard(contact));
+    }
+  }
+
+  function upsertContact(contact) {
+    if (!contact || !contact.phone) return;
+    contactsByPhone.set(contact.phone, contact);
+    const list = Array.from(contactsByPhone.values()).sort(
+      (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+    );
+    renderContacts(list);
+  }
+
+  function removeContactEntry(phone) {
+    contactsByPhone.delete(phone);
+    const list = Array.from(contactsByPhone.values()).sort(
+      (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+    );
+    renderContacts(list);
+  }
+
+  async function loadContacts() {
+    try {
+      const res = await fetch("/api/contacts");
+      if (!res.ok) return;
+      const data = await res.json();
+      renderContacts(data.contacts || []);
+    } catch (_) {}
+  }
+
+  async function addContact(ev) {
+    ev.preventDefault();
+    const name = $("contactName").value.trim();
+    const phone = $("contactPhone").value.trim();
+    const relationship = $("contactRel").value.trim();
+    if (!name || !phone) {
+      showToast("Name and phone are required", false);
+      return;
+    }
+    const btn = $("contactForm").querySelector("button[type=submit]");
+    btn.disabled = true;
+    try {
+      const res = await fetch("/api/contacts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, phone, relationship }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "failed");
+      upsertContact(data.contact);
+      $("contactForm").reset();
+      showToast(`${data.contact.name} added to allowlist`);
+    } catch (err) {
+      showToast(err.message === "failed" ? "Could not add contact" : (err.message || "Could not add contact"), false);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function removeContact(phone, card) {
+    const contact = contactsByPhone.get(phone);
+    const label = contact ? contact.name : formatPhone(phone);
+    if (!confirm(`Remove ${label} from the allowlist?`)) return;
+    const btn = card.querySelector(".remove-contact-btn");
+    btn.disabled = true;
+    try {
+      const res = await fetch("/api/contacts", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone }),
+      });
+      if (!res.ok) throw new Error("failed");
+      removeContactEntry(phone);
+      showToast(`${label} removed from allowlist`);
+    } catch (_) {
+      showToast("Could not remove contact", false);
+      btn.disabled = false;
+    }
+  }
+
+  $("contactForm").addEventListener("submit", addContact);
+
   async function verifyEntry(phone, card, addToContacts) {
     const nameInput = card.querySelector(".allow-name");
     const name = nameInput ? nameInput.value.trim() : "";
@@ -589,6 +767,8 @@
       });
       if (!res.ok) throw new Error("failed");
       removeHistoryEntry(phone);
+      const data = await res.json();
+      if (data.contact) upsertContact(data.contact);
       const msg = addToContacts
         ? `${name} marked safe and added to contacts`
         : `${formatPhone(phone)} marked safe`;
@@ -628,6 +808,10 @@
         upsertHistoryEntry(e.entry);
       } else if (e.type === "history_removed") {
         removeHistoryEntry(e.phone);
+      } else if (e.type === "contact_added") {
+        upsertContact(e.contact);
+      } else if (e.type === "contact_removed") {
+        removeContactEntry(e.phone);
       } else if (e.type === "transcript") {
         addTurn(e.role, e.text);
       } else if (e.type === "signal") {
@@ -661,6 +845,7 @@
   }
 
   loadHistory();
+  loadContacts();
   connect();
 </script>
 </body>

@@ -98,7 +98,49 @@ async def _history_verify(request: web.Request):
         )
 
     await push({"type": "history_removed", "phone": removed["phone"]})
+    if contact is not None:
+        await push({"type": "contact_added", "contact": contact})
     return web.json_response({"ok": True, "removed": removed, "contact": contact})
+
+
+async def _contacts_list(request: web.Request):
+    return web.json_response({"contacts": contacts.list_contacts()})
+
+
+async def _contacts_add(request: web.Request):
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+
+    name = (body.get("name") or "").strip()
+    if not name:
+        return web.json_response({"ok": False, "error": "name required"}, status=400)
+
+    contact = contacts.add(
+        body.get("phone"),
+        name=name,
+        relationship=body.get("relationship") or "",
+    )
+    if contact is None:
+        return web.json_response({"ok": False, "error": "invalid phone"}, status=400)
+
+    await push({"type": "contact_added", "contact": contact})
+    return web.json_response({"ok": True, "contact": contact})
+
+
+async def _contacts_remove(request: web.Request):
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+
+    removed = contacts.remove(body.get("phone"))
+    if removed is None:
+        return web.json_response({"ok": False, "error": "not found"}, status=404)
+
+    await push({"type": "contact_removed", "phone": removed["phone"]})
+    return web.json_response({"ok": True, "removed": removed})
 
 
 def build_app() -> web.Application:
@@ -108,6 +150,9 @@ def build_app() -> web.Application:
     app.router.add_get("/api/history", _history)
     app.router.add_delete("/api/history", _history_remove)
     app.router.add_post("/api/history/verify", _history_verify)
+    app.router.add_get("/api/contacts", _contacts_list)
+    app.router.add_post("/api/contacts", _contacts_add)
+    app.router.add_delete("/api/contacts", _contacts_remove)
     app.router.add_post("/ingest", _ingest)
     app.router.add_static("/static", STATIC_DIR)
     return app

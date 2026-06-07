@@ -87,6 +87,29 @@ def _save() -> None:
         f.write("\n")
 
 
+def list_contacts() -> list[dict]:
+    if not _loaded:
+        load_contacts()
+    return [
+        {"name": c.name, "phone": c.phone, "relationship": c.relationship}
+        for c in sorted(_by_number.values(), key=lambda c: c.name.lower())
+    ]
+
+
+def remove(number: str | None) -> dict | None:
+    if not _loaded:
+        load_contacts()
+    key = normalize(number)
+    if key is None:
+        return None
+    contact = _by_number.pop(key, None)
+    if contact is None:
+        return None
+    _save()
+    logger.info("contacts removed %s", key)
+    return {"name": contact.name, "phone": contact.phone, "relationship": contact.relationship}
+
+
 def add(
     number: str,
     name: str,
