@@ -56,8 +56,13 @@ Adapt to their story; examples of the KIND of detail to seek (not lines to recit
 - Tech support — ticket or case reference from their organization
 - Prize / sweepstakes — entry or confirmation detail for what they mention
 
+Give the caller a few chances to justify themselves: even when a turn looks suspicious,
+ask at least a couple of focused verification follow-ups before concluding it is a scam.
+A single alarming statement is grounds to probe, not yet to block.
+
 Deflection is a strong risk signal. If they dodge, cite policy, or change subject instead
-of answering, call flag_scam_signal("refused verification", 0.85) and move toward block.
+of answering across these follow-ups, call flag_scam_signal("refused verification", 0.85)
+and move toward block.
 
 Also call flag_scam_signal for patterns you notice: extreme urgency, unusual payment
 methods, code or credential requests, secrecy ("don't tell the bank").
@@ -96,6 +101,7 @@ class CallState:
     alert_sent: bool = False
     hangup_started: bool = False
     elevated_turns: int = 0
+    caller_turns: int = 0
     transfer_started: bool = False
     blocklist_recorded: bool = False
 
@@ -168,6 +174,7 @@ class ScreeningAgent(Agent):
         )
 
     async def screen_caller_text(self, text: str):
+        self.state.caller_turns += 1
         prior = self.state.scam_score
         result = await retrieve_tactics(text, prior=prior)
         self.state.scam_score = result.scam_score

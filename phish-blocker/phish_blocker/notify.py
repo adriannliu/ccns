@@ -5,6 +5,9 @@ logger = logging.getLogger("phish-blocker.notify")
 
 _DEFAULT_THRESHOLD = 0.66
 _DEFAULT_HANGUP_EXCHANGES = 2
+# Caller turns that must elapse before ANY score-driven hang-up. Gives the caller
+# a few chances to justify themselves before detection can end the call.
+_DEFAULT_MIN_CALLER_TURNS = 3
 
 
 def _parse_threshold(raw: str | None, fallback: float) -> float:
@@ -39,6 +42,16 @@ def hangup_exchanges_required() -> int:
         return max(1, int(raw))
     except (TypeError, ValueError):
         return _DEFAULT_HANGUP_EXCHANGES
+
+
+def min_caller_turns() -> int:
+    raw = os.getenv("HANGUP_MIN_CALLER_TURNS")
+    if not raw:
+        return _DEFAULT_MIN_CALLER_TURNS
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return _DEFAULT_MIN_CALLER_TURNS
 
 
 def should_hangup(

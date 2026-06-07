@@ -3,7 +3,7 @@ import logging
 from livekit.agents import JobContext
 
 from phish_blocker import blocklist, bus
-from phish_blocker.notify import _default_reason, should_hangup
+from phish_blocker.notify import _default_reason, min_caller_turns, should_hangup
 from phish_blocker.scam_handling import begin as begin_scam_handling
 
 logger = logging.getLogger("phish-blocker.hangup")
@@ -43,6 +43,19 @@ async def maybe_hangup_call(
 ) -> None:
     if state.hangup_started:
         return
+
+    # Give the caller a few chances to justify themselves before any score-driven
+    # hang-up. This guard takes precedence even over a forced (confirmed-tactic or
+    # confident-signal) trigger, so detection alone never ends the call too early.
+    if getattr(state, "caller_turns", 0) < min_caller_turns():
+        logger.info(
+            "hang-up deferred (%s): caller_turns=%d < min=%d",
+            trigger,
+            getattr(state, "caller_turns", 0),
+            min_caller_turns(),
+        )
+        return
+
     if not force and not should_hangup(
         state.scam_score,
         state.recommendation,
