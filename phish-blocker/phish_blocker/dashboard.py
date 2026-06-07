@@ -6,6 +6,8 @@ from pathlib import Path
 
 from aiohttp import WSMsgType, web
 
+from phish_blocker import blocklist
+
 logger = logging.getLogger("phish-blocker.dashboard")
 
 _clients: set[web.WebSocketResponse] = set()
@@ -51,10 +53,15 @@ async def _ingest(request: web.Request):
     return web.json_response({"ok": True})
 
 
+async def _history(request: web.Request):
+    return web.json_response({"entries": blocklist.list_history()})
+
+
 def build_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/", _index)
     app.router.add_get("/ws", _ws_handler)
+    app.router.add_get("/api/history", _history)
     app.router.add_post("/ingest", _ingest)
     app.router.add_static("/static", STATIC_DIR)
     return app

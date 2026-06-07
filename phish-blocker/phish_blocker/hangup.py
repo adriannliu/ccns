@@ -2,7 +2,7 @@ import logging
 
 from livekit.agents import JobContext
 
-from phish_blocker import bus
+from phish_blocker import blocklist, bus
 from phish_blocker.notify import _default_reason, should_hangup
 
 logger = logging.getLogger("phish-blocker.hangup")
@@ -11,6 +11,23 @@ _GOODBYE = (
     "This call cannot be connected. Say one brief polite sentence that you are "
     "ending the call and say goodbye. Do not mention scores, systems, or tools."
 )
+
+
+async def _record_blocklist(state) -> None:
+    if getattr(state, "blocklist_recorded", False):
+        return
+    caller_id = getattr(state, "caller_id", None)
+    entry = blocklist.record(
+        caller_id,
+        recommendation="block",
+        reason=state.reason,
+        scam_score=state.scam_score,
+        signals=list(state.signals),
+    )
+    if entry is None:
+        return
+    state.blocklist_recorded = True
+    await bus.push({"type": "history_entry", "entry": entry})
 
 
 async def maybe_hangup_call(
@@ -51,6 +68,7 @@ async def maybe_hangup_call(
             }
         )
 
+    await _record_blocklist(state)
     await send_summary(trigger)
 
     try:

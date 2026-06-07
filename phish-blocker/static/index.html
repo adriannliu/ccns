@@ -185,6 +185,33 @@
   .verdict.challenge { background: rgba(241,196,15,.1);  color: var(--amber); border-color: rgba(241,196,15,.5); box-shadow: 0 0 24px rgba(241,196,15,.12); }
   .verdict.block     { background: rgba(255,77,94,.12);  color: var(--red);   border-color: rgba(255,77,94,.6);  box-shadow: 0 0 30px rgba(255,77,94,.2); }
   .verdict .reason { font-weight: 400; font-size: 13px; margin-top: 8px; color: var(--text); opacity: .82; letter-spacing: .02em; text-transform: none; }
+
+  /* history */
+  .left-col { min-height: 0; }
+  .history-section {
+    flex-shrink: 0; border-top: 1px solid var(--border); margin-top: 14px;
+    padding-top: 14px; max-height: 240px; display: flex; flex-direction: column; min-height: 0;
+  }
+  .history-title::before { background: var(--red); box-shadow: 0 0 8px var(--red); }
+  #history { overflow-y: auto; flex: 1; min-height: 0; padding-right: 4px; }
+  #history::-webkit-scrollbar { width: 8px; }
+  #history::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+  .hist-item {
+    border: 1px solid var(--border2); border-left: 3px solid var(--red);
+    background: linear-gradient(90deg, rgba(255,77,94,.06), transparent 75%);
+    border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; animation: slidein .3s ease;
+  }
+  .hist-item.challenge { border-left-color: var(--amber); background: linear-gradient(90deg, rgba(241,196,15,.06), transparent 75%); }
+  .hist-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+  .hist-phone { font-family: var(--mono); font-size: 12px; font-weight: 700; letter-spacing: .04em; }
+  .hist-badge {
+    font-family: var(--mono); font-size: 9px; letter-spacing: .14em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border2); color: var(--muted);
+  }
+  .hist-badge.block { color: var(--red); border-color: rgba(255,77,94,.45); background: rgba(255,77,94,.1); }
+  .hist-badge.challenge { color: var(--amber); border-color: rgba(241,196,15,.45); background: rgba(241,196,15,.1); }
+  .hist-reason { font-size: 12px; line-height: 1.4; color: #c7cedd; margin-bottom: 5px; }
+  .hist-meta { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .06em; }
 </style>
 </head>
 <body>
@@ -206,9 +233,13 @@
   </header>
 
   <main>
-    <div class="panel">
+    <div class="panel left-col">
       <div class="panel-title">Live Transcript</div>
       <div id="transcript"></div>
+      <div class="history-section">
+        <div class="panel-title history-title">History</div>
+        <div id="history"><div class="empty">No flagged numbers yet.</div></div>
+      </div>
     </div>
 
     <div class="analysis">
@@ -298,6 +329,76 @@
     v.innerHTML = (rec ? rec.toUpperCase() : "SCREENING…") + (reason ? `<div class="reason">${reason}</div>` : "");
   }
 
+  const historyByPhone = new Map();
+
+  function formatPhone(phone) {
+    if (!phone) return "Unknown";
+    const d = phone.replace(/\D/g, "");
+    if (d.length === 11 && d.startsWith("1")) {
+      return `+1 (${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
+    }
+    return phone;
+  }
+
+  function formatWhen(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+
+  function renderHistoryItem(entry) {
+    const div = document.createElement("div");
+    const rec = entry.recommendation || "block";
+    div.className = "hist-item " + rec;
+    const pct = Math.round((entry.scam_score || 0) * 100);
+    const count = entry.flag_count > 1 ? ` · ${entry.flag_count} calls` : "";
+    div.innerHTML =
+      `<div class="hist-head">` +
+        `<span class="hist-phone"></span>` +
+        `<span class="hist-badge ${rec}">${rec}</span>` +
+      `</div>` +
+      `<div class="hist-reason"></div>` +
+      `<div class="hist-meta"></div>`;
+    div.querySelector(".hist-phone").textContent = formatPhone(entry.phone);
+    div.querySelector(".hist-reason").textContent = entry.reason || "Flagged as suspicious.";
+    div.querySelector(".hist-meta").textContent =
+      `${formatWhen(entry.last_flagged_at)} · risk ${pct}%${count}`;
+    return div;
+  }
+
+  function renderHistory(entries) {
+    historyByPhone.clear();
+    const box = $("history");
+    box.innerHTML = "";
+    if (!entries || !entries.length) {
+      box.innerHTML = '<div class="empty">No flagged numbers yet.</div>';
+      return;
+    }
+    for (const entry of entries) {
+      historyByPhone.set(entry.phone, entry);
+      box.appendChild(renderHistoryItem(entry));
+    }
+  }
+
+  function upsertHistoryEntry(entry) {
+    if (!entry || !entry.phone) return;
+    historyByPhone.set(entry.phone, entry);
+    const entries = Array.from(historyByPhone.values()).sort(
+      (a, b) => new Date(b.last_flagged_at) - new Date(a.last_flagged_at)
+    );
+    renderHistory(entries);
+  }
+
+  async function loadHistory() {
+    try {
+      const res = await fetch("/api/history");
+      if (!res.ok) return;
+      const data = await res.json();
+      renderHistory(data.entries || []);
+    } catch (_) {}
+  }
+
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -305,12 +406,17 @@
       const e = JSON.parse(m.data);
       if (e.type === "call_start") {
         $("dot").classList.add("live");
-        $("status").textContent = "Call in progress";
+        $("status").textContent = e.blocklist_hit ? "Blocked repeat caller" : "Call in progress";
         $("transcript").innerHTML = "";
         $("chips").innerHTML = '<div class="empty">No tactics matched yet.</div>';
         setScore(0);
         setVerdict("", "");
         $("verdict").textContent = "SCREENING…";
+        if (e.blocklist_hit) {
+          setVerdict("block", "Known scam source — call rejected");
+        }
+      } else if (e.type === "history_entry") {
+        upsertHistoryEntry(e.entry);
       } else if (e.type === "transcript") {
         addTurn(e.role, e.text);
       } else if (e.type === "signal") {
@@ -338,6 +444,7 @@
       setTimeout(connect, 1000);
     };
   }
+  loadHistory();
   connect();
 </script>
 </body>

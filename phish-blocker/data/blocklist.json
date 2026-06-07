@@ -1,0 +1,14 @@
+[
+  {
+    "phone": "+15551234567",
+    "first_flagged_at": "2026-06-07T15:13:30+00:00",
+    "last_flagged_at": "2026-06-07T15:13:30+00:00",
+    "flag_count": 2,
+    "recommendation": "block",
+    "reason": "Previously flagged",
+    "scam_score": 0.95,
+    "signals": [
+      "IRS tactic"
+    ]
+  }
+]

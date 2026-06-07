@@ -25,6 +25,16 @@ SCRIPT = [
      "explanation": "Matched known scam tactic 'Urgency / time pressure' (FTC - How To Avoid a Scam); caller used red-flag phrasing: \"don't hang up\", \"stay on the line\", \"right now\"."},
     {"type": "verdict", "recommendation": "block", "scam_score": 0.95,
      "reason": "Caller impersonated the IRS, threatened arrest, and demanded gift-card payment — all documented scam tactics."},
+    {"type": "history_entry", "entry": {
+        "phone": "+15551234567",
+        "first_flagged_at": "2026-06-07T12:00:00+00:00",
+        "last_flagged_at": "2026-06-07T12:00:00+00:00",
+        "flag_count": 1,
+        "recommendation": "block",
+        "reason": "Caller impersonated the IRS, threatened arrest, and demanded gift-card payment — all documented scam tactics.",
+        "scam_score": 0.95,
+        "signals": ["IRS back-taxes arrest threat", "IRS gift-card payment demand", "Urgency / time pressure"],
+    }},
 ]
 
 

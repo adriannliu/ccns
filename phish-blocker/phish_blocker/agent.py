@@ -16,7 +16,7 @@ from livekit.agents import (
 )
 from livekit.plugins import aws, silero
 
-from phish_blocker import bus, contacts
+from phish_blocker import blocklist, bus, contacts
 from phish_blocker.moss_tactics import init_moss, retrieve_tactics
 from phish_blocker.hangup import maybe_hangup_call
 from phish_blocker.notify import hangup_threshold, send_call_summary
@@ -86,16 +86,18 @@ class CallState:
     seen_tactics: set = field(default_factory=set)
     recommendation: str = "pass"
     reason: str = ""
+    caller_id: str | None = None
     alert_sent: bool = False
     hangup_started: bool = False
     elevated_turns: int = 0
     transfer_started: bool = False
+    blocklist_recorded: bool = False
 
 
 class ScreeningAgent(Agent):
-    def __init__(self, job_ctx: JobContext | None = None) -> None:
+    def __init__(self, job_ctx: JobContext | None = None, caller_id: str | None = None) -> None:
         super().__init__(instructions=SCREENING_INSTRUCTIONS)
-        self.state = CallState()
+        self.state = CallState(caller_id=caller_id)
         self._job_ctx = job_ctx
 
     async def on_enter(self):
@@ -113,6 +115,21 @@ class ScreeningAgent(Agent):
         )
         if sent:
             self.state.alert_sent = True
+
+    async def _record_flagged(self):
+        if self.state.blocklist_recorded:
+            return
+        entry = blocklist.record(
+            self.state.caller_id,
+            recommendation=self.state.recommendation,
+            reason=self.state.reason,
+            scam_score=self.state.scam_score,
+            signals=list(self.state.signals),
+        )
+        if entry is None:
+            return
+        self.state.blocklist_recorded = True
+        await bus.push({"type": "history_entry", "entry": entry})
 
     async def maybe_hangup(self, trigger: str):
         await maybe_hangup_call(
@@ -210,6 +227,9 @@ class ScreeningAgent(Agent):
 
         if recommendation == "block":
             await self.maybe_hangup("threshold")
+        elif recommendation == "challenge":
+            await self._record_flagged()
+            await self.maybe_send_summary("threshold")
         elif recommendation == "pass":
             await self.maybe_transfer("threshold")
         else:
@@ -220,21 +240,32 @@ class ScreeningAgent(Agent):
 server = AgentServer()
 
 
-async def _try_contact_fastpath(ctx: JobContext) -> bool:
+async def _wait_sip_participant(ctx: JobContext) -> rtc.RemoteParticipant | None:
     if ctx.is_fake_job():
-        return False
-    if not transfer_enabled():
-        return False
-
+        return None
     try:
-        participant = await ctx.wait_for_participant(
+        return await ctx.wait_for_participant(
             kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
         )
     except Exception as e:
-        logger.warning("contact fast-path: no SIP participant: %s", e)
+        logger.warning("no SIP participant: %s", e)
+        return None
+
+
+def _caller_id(participant: rtc.RemoteParticipant | None) -> str | None:
+    if participant is None:
+        return None
+    return participant.attributes.get("sip.phoneNumber")
+
+
+async def _try_contact_fastpath(
+    ctx: JobContext,
+    participant: rtc.RemoteParticipant,
+) -> bool:
+    if not transfer_enabled():
         return False
 
-    number = participant.attributes.get("sip.phoneNumber")
+    number = _caller_id(participant)
     contact = contacts.lookup(number)
     if contact is None:
         return False
@@ -258,14 +289,31 @@ async def _try_contact_fastpath(ctx: JobContext) -> bool:
     return True
 
 
+async def _try_blocklist_fastpath(
+    ctx: JobContext,
+    participant: rtc.RemoteParticipant,
+) -> bool:
+    number = _caller_id(participant)
+    entry = blocklist.lookup(number)
+    if entry is None:
+        return False
+
+    return await blocklist.reject_repeat_caller(ctx, participant, entry)
+
+
 @server.rtc_session(agent_name="agent-py")
 async def entrypoint(ctx: JobContext):
     await init_moss()
 
-    if await _try_contact_fastpath(ctx):
+    participant = await _wait_sip_participant(ctx)
+    caller_id = _caller_id(participant)
+
+    if participant is not None and await _try_contact_fastpath(ctx, participant):
+        return
+    if participant is not None and await _try_blocklist_fastpath(ctx, participant):
         return
 
-    agent = ScreeningAgent(job_ctx=ctx)
+    agent = ScreeningAgent(job_ctx=ctx, caller_id=caller_id)
 
     region = os.getenv("AWS_DEFAULT_REGION") or os.getenv("AWS_REGION")
     llm_kwargs = {
@@ -299,7 +347,7 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(_on_call_end)
 
-    await bus.push({"type": "call_start"})
+    await bus.push({"type": "call_start", "caller_id": caller_id})
     await session.start(agent=agent, room=ctx.room)
 
 
