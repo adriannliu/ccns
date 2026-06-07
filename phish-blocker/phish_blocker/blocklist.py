@@ -216,3 +216,17 @@ async def reject_repeat_caller(job_ctx, participant, entry: BlockedEntry) -> boo
         return False
 
     return True
+
+
+if __name__ == "__main__":
+    import sys
+
+    load_blocklist()
+    entries = list_history()
+    print(f"Loaded {len(entries)} flagged numbers from {_BLOCKLIST_PATH}")
+    for e in entries:
+        print(f"  {e['phone']}  {e['recommendation']}  {e['reason'][:60]}")
+
+    if len(sys.argv) > 1:
+        q = sys.argv[1]
+        print(f"lookup({q!r}) -> {lookup(q)}")

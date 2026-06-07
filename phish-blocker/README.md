@@ -13,6 +13,8 @@ and renders a live verdict on a dashboard.
 - **Auto-hangup persistent scammers** — sustained high score across multiple turns triggers BLOCK + goodbye
 - **Transfers verified callers** — PASS verdict → SIP REFER cold transfer to `RESIDENT_PHONE`
 - **Known-contact fast-path** — caller ID in `data/contacts.json` → silent PASS + immediate transfer (no agent)
+- **Scam blocklist** — flagged numbers saved to `data/blocklist.json` with reason; repeat callers auto-blocked
+- **History panel** — dashboard shows past blocked/flagged numbers (`GET /api/history`)
 - **Live dashboard** — transcript, scam score, tactic chips, verdict, transfer status
 
 ## Structure
@@ -23,6 +25,7 @@ phish-blocker/
 │   ├── agent.py         # ScreeningAgent, contact fast-path, tools
 │   ├── transfer.py      # SIP REFER cold transfer on PASS
 │   ├── contacts.py      # Local JSON contacts allowlist
+│   ├── blocklist.py     # Flagged scammer numbers + repeat-caller reject
 │   ├── hangup.py        # Auto-block + goodbye + room teardown
 │   ├── moss_tactics.py  # Moss retrieval + scam score
 │   ├── corpus.py        # Scam tactic corpus loader
@@ -33,6 +36,7 @@ phish-blocker/
 │   └── index.html       # live dashboard UI
 ├── data/
 │   ├── contacts.json    # known callers (E.164 phone → name)
+│   ├── blocklist.json   # flagged/blocked numbers + reasons
 │   └── scam_tactics.jsonl
 ├── scripts/
 │   ├── build_moss_index.py
@@ -87,12 +91,28 @@ Edit `data/contacts.json`:
 
 Phone numbers are normalized to E.164. Known callers bypass the agent entirely and are cold-transferred to `RESIDENT_PHONE`. Caller ID can be spoofed — this is a convenience layer, not authentication.
 
+## Scam blocklist
+
+Blocked and challenged calls are saved to `data/blocklist.json` with phone number, reason, scam score, and matched signals. The dashboard **History** panel lists all flagged numbers (`GET /api/history`).
+
+If a previously flagged number calls again, the call is **instantly rejected** (no agent) — same fast-path pattern as contacts, but for BLOCK.
+
+Inspect or test lookup:
+
+```bash
+python -m phish_blocker.blocklist +15551234567
+cat data/blocklist.json
+```
+
+Contacts take priority: a number in both lists will PASS, not block.
+
 ## Demo script (~90s)
 
 1. **Stakes:** AI screens calls so scam callers never reach you; legit callers get through.
-2. **Scam call (live):** Teammate plays IRS/gift-card script → dashboard score climbs → agent interrogates → deflects → BLOCK → auto-hangup.
-3. **Known contact:** Call from a number in `contacts.json` → instant PASS + transfer (no screening).
-4. **Unknown legit caller:** "Dave confirming lunch Tuesday" → brief screen → PASS → transfer.
+2. **Scam call (live):** Teammate plays IRS/gift-card script → score climbs → BLOCK → number saved to History.
+3. **Repeat scammer:** Same number calls again → instant BLOCK, no screening.
+4. **Known contact:** Call from a number in `contacts.json` → instant PASS + transfer (no screening).
+5. **Unknown legit caller:** "Dave confirming lunch Tuesday" → brief screen → PASS → transfer.
 
 **Offline UI rehearsal:** run `demo_dashboard.py` while the dashboard is open.
 

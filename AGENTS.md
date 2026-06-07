@@ -17,15 +17,17 @@ ccns/
 │   │   ├── agent.py           # ScreeningAgent, contact fast-path, tools
 │   │   ├── transfer.py        # SIP REFER cold transfer on PASS
 │   │   ├── contacts.py        # Local JSON contacts allowlist
+│   │   ├── blocklist.py       # Flagged scammer numbers + repeat-caller reject
 │   │   ├── hangup.py          # Auto-block + goodbye + room teardown
 │   │   ├── moss_tactics.py    # Moss retrieval + scam score
 │   │   ├── corpus.py          # Scam tactic corpus loader
 │   │   ├── notify.py          # Console call summaries + hangup thresholds
-│   │   ├── dashboard.py       # aiohttp server, /ws broadcast, /ingest
+│   │   ├── dashboard.py       # aiohttp: /ws, /ingest, /api/history
 │   │   └── bus.py             # agent → dashboard HTTP bridge
 │   ├── static/index.html      # live dashboard UI
 │   ├── data/
 │   │   ├── contacts.json      # known callers (E.164)
+│   │   ├── blocklist.json     # flagged/blocked numbers + reasons
 │   │   └── scam_tactics.jsonl
 │   └── scripts/
 │       ├── build_moss_index.py
@@ -53,11 +55,13 @@ ccns/
 
 ```
 Caller → Twilio (TwiML Bin → SIP) → LiveKit trunk + dispatch → room
-  → contact fast-path? (sip.phoneNumber in data/contacts.json) → PASS + cold transfer
+  → contact fast-path? (sip.phoneNumber in contacts.json) → PASS + cold transfer
+  → blocklist fast-path? (sip.phoneNumber in blocklist.json) → instant BLOCK + delete_room
   → else agent.py screens
       → per caller turn: Moss retrieval (moss_tactics.py)
       → tools: flag_scam_signal / set_recommendation
-      → sustained high score → hangup.py (auto BLOCK)
+      → block/challenge → blocklist.py record → History panel
+      → sustained high score → hangup.py (auto BLOCK + record)
       → PASS → transfer.py (SIP REFER → RESIDENT_PHONE)
   → bus.py POSTs to dashboard /ingest → /ws → browser
 ```
@@ -96,14 +100,15 @@ Set `RESIDENT_PHONE` and test SIP REFER transfer on a real call. See handoff.md 
 - **Tested:** dashboard UI replay via `demo_dashboard.py`.
 - **Assumed / verify on real call:** SIP REFER cold transfer to `RESIDENT_PHONE`.
 - **Assumed / verify on real call:** contact fast-path via `sip.phoneNumber`.
+- **Assumed / verify on real call:** blocklist repeat-caller fast-path + `data/blocklist.json` persistence.
 
 If `AgentServer` / `@server.rtc_session()` errors on install, check the installed
 `livekit-agents` version's quickstart — entry-point boilerplate is the likely drift.
 
 ## Open build items
 
-1. **Scam caller blocklist** — persist blocked numbers locally with reason/score/signals; user-facing list in dashboard or CLI; optional future auto-reject fast-path. See handoff.md.
-2. Dashboard known-contact banner on `call_start.contact`.
-3. Additive scam score bumps for repeated signals/deflections (hangup partially covers persistence today).
-4. Smarter claim-based interrogation challenges.
-5. Concrete LiveKit-inbound-Twilio checklist with exact `lk` CLI commands.
+1. Dashboard known-contact banner on `call_start.contact`.
+2. Additive scam score bumps for repeated signals/deflections (hangup partially covers persistence today).
+3. Smarter claim-based interrogation challenges.
+4. Concrete LiveKit-inbound-Twilio checklist with exact `lk` CLI commands.
+5. Blocklist: manual unblock UI, export, optional Twilio SMS on new flags.
