@@ -1,4 +1,4 @@
-"""Phish-Blocker — AI call screener for inbound phone calls."""
+"""PhishBowl — AI call screener for inbound phone calls."""
 
 from phish_blocker.ssl_certs import ensure as _ensure_ssl_certs
 

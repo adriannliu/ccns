@@ -4,7 +4,7 @@ Hackathon workspace for voice-native AI agent projects.
 
 ## Projects
 
-### [phish-blocker](./phish-blocker/)
+### [PhishBowl](./phish-blocker/)
 
 AI call screener: LiveKit Agents + Twilio SIP + AWS Nova Sonic. Screens inbound calls for scam intent (conversation only), cold-transfers verified callers, maintains a local blocklist with History tab, and auto-rejects repeat flagged numbers.
 
@@ -19,5 +19,5 @@ Run the dashboard and agent in separate terminals — see [phish-blocker/README.
 
 ## Docs
 
-- [Phish-Blocker agent handoff](./docs/handoff.md) — full implementer spec for coding agents
+- [PhishBowl agent handoff](./docs/handoff.md) — full implementer spec for coding agents
 - [Objection.ai venture playbook](./docs/objection-ai.md) — separate venture notes, not phish-blocker code

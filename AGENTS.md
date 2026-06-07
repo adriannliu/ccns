@@ -1,6 +1,6 @@
 # Agent guide
 
-Hackathon workspace for voice-native AI agents. Active project: **phish-blocker** — a
+Hackathon workspace for voice-native AI agents. Active project: **PhishBowl** (`phish-blocker/`) — a
 conversational call screener that detects scam intent, interrogates suspicious callers,
 cold-transfers verified callers to the resident, and streams a live PASS/CHALLENGE/BLOCK
 verdict to a dashboard.

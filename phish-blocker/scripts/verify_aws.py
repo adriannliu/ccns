@@ -23,7 +23,7 @@ def fail(msg: str) -> None:
 
 
 def main() -> int:
-    print("=== phish-blocker AWS / Nova Sonic verification ===\n")
+    print("=== PhishBowl AWS / Nova Sonic verification ===\n")
     errors = 0
 
     print("1. Environment")

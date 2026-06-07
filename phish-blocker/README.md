@@ -1,4 +1,4 @@
-# Phish-Blocker
+# PhishBowl
 
 AI call screener built on LiveKit Agents + Twilio SIP + Amazon Nova Sonic (Bedrock).
 An inbound call is screened by a conversational agent that detects scam signals,

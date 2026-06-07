@@ -1,4 +1,4 @@
-# Phish-Blocker — Agent Handoff (June 2026)
+# PhishBowl — Agent Handoff (June 2026)
 
 Copy this doc (or point agents at `AGENTS.md` + this file) before coding. B2C hackathon project: AI phone screener that detects scam calls, interrogates suspicious callers, blocks/flags repeat offenders, and cold-transfers legit callers to the resident.
 

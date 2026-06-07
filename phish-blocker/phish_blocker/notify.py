@@ -104,7 +104,7 @@ def _format_summary(
 
     when = "during the call" if trigger == "threshold" else "after the call ended"
     lines = [
-        f"Phish-Blocker: call {title} (risk {pct}%) — summary {when}",
+        f"PhishBowl: call {title} (risk {pct}%) — summary {when}",
         "",
         reason.strip() or _default_reason(signals, scam_score),
     ]
